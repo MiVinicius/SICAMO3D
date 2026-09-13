@@ -121,8 +121,8 @@ teste/
 └── src/                           # Módulos do sistema
     ├── ai/
     │   ├── directml_inference.py  # Motor de inferência ONNX Runtime via DirectML (AMD GPU)
-    │   ├── hand_roi_detector.py   # Fase 2: Recorte métrico de alta resolução nas mãos (1080p)
-    │   └── depth_clustering_3d.py # Fase 4: Segmentação Geométrica 3D por Nuvem de Pontos
+    │   ├── hand_roi_detector.py   # Recorte métrico de alta resolução nas mãos (1080p)
+    │   └── depth_clustering_3d.py # Segmentação Geométrica 3D por Nuvem de Pontos
     ├── core/
     │   ├── config.py              # Dataclasses de configuração e resolução de pesos
     │   └── kinect_sensor.py       # Driver PyKinect2 otimizado com unprojection métrica
