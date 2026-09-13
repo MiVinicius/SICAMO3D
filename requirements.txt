@@ -1,0 +1,24 @@
+# ==============================================================================
+# Dependências do Sistema Socioenativo 3D (OpenPTrack Windows)
+# Python 3.11 (64-bit) no Windows 10/11
+# ==============================================================================
+
+# Computação Científica e Visão Computacional
+numpy>=1.26.0,<2.5.0
+opencv-python>=4.8.0
+scipy>=1.12.0
+pillow>=10.0.0
+
+# Driver e Integração com Sensor Kinect v2
+pykinect2>=0.1.0
+comtypes>=1.4.0
+
+# IA e Aceleração de Hardware DirectML (DirectX 12 para GPU AMD / Intel / NVIDIA)
+onnx>=1.16.0
+onnxruntime-directml>=1.19.0
+ultralytics>=8.3.0
+
+# Utilitários de Sistema e Desempenho
+psutil>=5.9.0
+PyYAML>=6.0.0
+tqdm>=4.66.0

@@ -1,0 +1,19 @@
+# Normalização automática de quebras de linha (evita conflitos CRLF/LF)
+* text=auto
+
+# Arquivos de código e documentação
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.csv text eol=lf
+
+# Arquivos binários
+*.pt binary
+*.onnx binary
+*.bin binary
+*.jpg binary
+*.png binary
+*.ico binary
