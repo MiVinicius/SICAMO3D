@@ -1,5 +1,5 @@
 """
-Ponto de entrada principal: Sistema Socioenativo 3D Multi-Alvo (Windows + AMD Radeon RX 6600)
+Ponto de entrada principal: Sistema de Captura de Movimento em 3D Multi-Alvo (Windows + AMD Radeon RX 6600)
 """
 import time
 import cv2
@@ -26,7 +26,7 @@ def main():
     ctypes.windll.winmm.timeBeginPeriod(1)
 
     print("=" * 70)
-    print(f"SISTEMA SOCIOENATIVO 3D - OPENPTRACK MODERNO (v{config.version})")
+    print(f"SISTEMA DE CAPTURA DE MOVIMENTO EM 3D - OPENPTRACK MODERNO (v{config.version})")
     print("=" * 70)
 
     # 1. Inicializa o sensor Kinect v2

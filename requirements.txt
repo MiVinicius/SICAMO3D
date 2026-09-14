@@ -1,5 +1,5 @@
 # ==============================================================================
-# Dependências do Sistema Socioenativo 3D (OpenPTrack Windows)
+# Dependências do Sistema de Captura de Movimento em 3D Multi-Alvo (OpenPTrack Windows)
 # Python 3.11 (64-bit) no Windows 10/11
 # ==============================================================================
 
