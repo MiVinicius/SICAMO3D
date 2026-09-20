@@ -18,7 +18,10 @@ onnx>=1.16.0
 onnxruntime-directml>=1.19.0
 ultralytics>=8.3.0
 
-# Utilitários de Sistema e Desempenho
+# Utilitários de Sistema e Análise Científica
 psutil>=5.9.0
 PyYAML>=6.0.0
 tqdm>=4.66.0
+pandas>=2.2.0
+pytest>=8.0.0
+

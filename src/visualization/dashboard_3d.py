@@ -49,16 +49,20 @@ class Dashboard3D:
                color_bgr: np.ndarray, 
                tracks: List, 
                toys: List[Dict], 
-               proxemic_events: List[Dict],
-               joint_events: List[Dict],
-               fps: float,
-               gpu_latency_ms: float,
-               hand_crops: Optional[List[Dict]] = None,
-               depth_clusters: Optional[List[Dict]] = None,
-               view_mode: int = 1,
-               show_trajectories: bool = True,
-               skeleton_mode: int = 2,
-               show_hud_help: bool = False) -> np.ndarray:
+               proxemic_events: List[Dict], 
+               joint_events: List[Dict], 
+               fps: float, 
+               gpu_latency_ms: float, 
+               hand_crops: Optional[List[Dict]] = None, 
+               depth_clusters: Optional[List[Dict]] = None, 
+               view_mode: int = 1, 
+               show_trajectories: bool = True, 
+               skeleton_mode: int = 2, 
+               show_hud_help: bool = False,
+               scene_id: str = "Cena 1",
+               holder_id: Optional[int] = None,
+               gpu_name: str = "DirectML (DirectX 12)",
+               zones: Optional[List[Dict]] = None) -> np.ndarray:
         """
         view_mode:
           1 = Dashboard Científico Triplo (Padrão: Câmera + Planta 3D + Painel)
@@ -171,10 +175,13 @@ class Dashboard3D:
             proxemic_events=proxemic_events,
             joint_events=joint_events,
             fps=fps,
-            gpu_latency_ms=gpu_latency_ms
+            gpu_latency_ms=gpu_latency_ms,
+            scene_id=scene_id,
+            holder_id=holder_id,
+            gpu_name=gpu_name
         )
 
-        # Miniatura PiP na coluna 4 do painel inferior
+        # Miniatura PiP na coluna 4 do painel inferior (focalizada no portador ou na pelúcia)
         self._draw_pip_window(
             target_canvas=info_panel,
             color_bgr=color_bgr,
@@ -185,8 +192,9 @@ class Dashboard3D:
             y_pos=105
         )
 
-        cv2.putText(info_panel, f"v{config.version} | Atalhos: [1] Padrao | [2] Mapa 3D | [3] Camera AR | [T] Trajetoria | [S] Esqueleto | [M] Ajuda | [Q/ESC] Sair", 
+        cv2.putText(info_panel, f"v{config.version} | Modos: [1] Triplo | [2] Mapa | [3] AR | Operador: [N] Prox Cena | [F] Facilitador | [P] Portador | [M] Ajuda | [Q] Sair", 
                     (25, 340), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (140, 140, 140), 1)
+
 
         if show_hud_help:
             self._draw_hud_help(self.canvas, view_mode, show_trajectories, skeleton_mode)
@@ -413,24 +421,32 @@ class Dashboard3D:
                             proxemic_events: List[Dict], 
                             joint_events: List[Dict], 
                             fps: float, 
-                            gpu_latency_ms: float):
+                            gpu_latency_ms: float,
+                            scene_id: str = "Cena 1",
+                            holder_id: Optional[int] = None,
+                            gpu_name: str = "DirectML (DirectX 12)"):
         """Desenha o cabeçalho de status e as 3 colunas científicas do painel inferior."""
-        status_line = (f"SISTEMA SOCIOENATIVO 3D | GPU: AMD Radeon RX 6600 (DirectML) | "
-                       f"FPS: {fps:.1f} | Latência IA: {gpu_latency_ms:.1f} ms | Pessoas Ativas: {len(tracks)}")
-        cv2.putText(info_panel, status_line, (25, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 180), 2)
+        status_line = (f"SICAMO3D | GPU: {gpu_name} | "
+                       f"FPS: {fps:.1f} | Latência IA: {gpu_latency_ms:.1f} ms | "
+                       f"Cena: {scene_id} | Portador: #{holder_id if holder_id is not None else 'NENHUM'}")
+        cv2.putText(info_panel, status_line, (25, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 255, 180), 2)
         cv2.line(info_panel, (25, 50), (1575, 50), (60, 60, 60), 1)
 
-        # Coluna 1: Estados Individuais (Posturas e Velocidades)
-        cv2.putText(info_panel, "[ INDIVÍDUOS & POSTURAS ]", (30, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 200, 80), 2)
+        # Coluna 1: Estados Individuais (Posturas, Papéis e Velocidades)
+        cv2.putText(info_panel, "[ PARTICIPANTES & PAPÉIS ]", (30, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 200, 80), 2)
         y_off = 115
         if not tracks:
-            cv2.putText(info_panel, "Nenhuma pessoa no campo de visão", (30, y_off), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 120, 120), 1)
+            cv2.putText(info_panel, "Nenhuma pessoa no stand", (30, y_off), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 120, 120), 1)
         for trk in tracks[:5]:
-            toy_txt = f" | Segurando: {trk.held_toy}" if trk.held_toy else ""
-            txt = f"ID #{trk.track_id}: Postura: {trk.posture.upper()} | Vel: {trk.speed:.2f} m/s{toy_txt}"
-            color = self.id_colors[(trk.track_id - 1) % len(self.id_colors)]
+            is_holder = (trk.track_id == holder_id)
+            holder_tag = " [PORTADOR]" if is_holder else ""
+            role_tag = f" ({trk.role.upper()})" if hasattr(trk, 'role') else ""
+            pres_tag = f" - {trk.presence_state}" if hasattr(trk, 'presence_state') else ""
+            txt = f"ID #{trk.track_id}{role_tag}: {trk.posture.upper()} | {trk.speed:.2f} m/s{pres_tag}{holder_tag}"
+            color = (0, 255, 255) if is_holder else self.id_colors[(trk.track_id - 1) % len(self.id_colors)]
             cv2.putText(info_panel, txt, (30, y_off), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1)
             y_off += 28
+
 
         # Coluna 2: Proxêmica e Distâncias Interpessoais
         cv2.putText(info_panel, "[ PROXÊMICA & DISTÂNCIAS ]", (520, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 200, 80), 2)

@@ -8,13 +8,14 @@ import onnxruntime as ort
 from typing import List, Dict, Tuple, Optional
 
 class DirectMLInference:
-    def __init__(self, model_path: str, conf_thresh: float = 0.40, iou_thresh: float = 0.45):
+    def __init__(self, model_path: str, conf_thresh: float = 0.40, iou_thresh: float = 0.45, device_id: Optional[int] = None):
         self.model_path = model_path
         self.conf_thresh = conf_thresh
         self.iou_thresh = iou_thresh
+        self.device_id = device_id if device_id is not None else 0
         
-        # Provedor DirectML garante aceleração direta na AMD Radeon RX 6600
-        providers = [('DmlExecutionProvider', {'device_id': 0}), 'CPUExecutionProvider']
+        # Provedor DirectML com device_id explícito (suporta GPU primária ou secundária)
+        providers = [('DmlExecutionProvider', {'device_id': self.device_id}), 'CPUExecutionProvider']
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         sess_options.enable_mem_pattern = True
@@ -23,6 +24,7 @@ class DirectMLInference:
         
         self.session = ort.InferenceSession(model_path, sess_options, providers=providers)
         self.active_provider = self.session.get_providers()[0]
+
         self.input_name = self.session.get_inputs()[0].name
         self.input_shape = self.session.get_inputs()[0].shape # [1, 3, 640, 640]
         self.input_h = self.input_shape[2]
@@ -143,16 +145,15 @@ class DirectMLInference:
         v_scores = max_scores[valid_mask]
         v_classes = best_classes[valid_mask]
 
-        # Filtra apenas as classes de interesse (brinquedos ou teddy bear 77)
-        target_keys = set(target_classes.keys())
-        target_keys.add(77)
-        class_filter = np.array([c in target_keys for c in v_classes], dtype=bool)
-        if not np.any(class_filter):
-            return []
-
-        v_output = v_output[class_filter]
-        v_scores = v_scores[class_filter]
-        v_classes = v_classes[class_filter]
+        # Filtra apenas as classes de interesse (definidas em target_classes)
+        target_keys = set(target_classes.keys()) if target_classes is not None else None
+        if target_keys is not None:
+            class_filter = np.array([c in target_keys for c in v_classes], dtype=bool)
+            if not np.any(class_filter):
+                return []
+            v_output = v_output[class_filter]
+            v_scores = v_scores[class_filter]
+            v_classes = v_classes[class_filter]
 
         cx = v_output[:, 0]
         cy = v_output[:, 1]
@@ -174,7 +175,7 @@ class DirectMLInference:
             for idx in indices.flatten():
                 bx, by, bw, bh = boxes[idx]
                 cid = class_ids[idx]
-                name = target_classes.get(cid, "boneco_pelucia_toad" if cid == 77 else f"objeto_{cid}")
+                name = target_classes.get(cid, f"objeto_{cid}") if target_classes is not None else f"objeto_{cid}"
                 results.append({
                     "bbox": [bx, by, bx + bw, by + bh],
                     "confidence": confidences[idx],

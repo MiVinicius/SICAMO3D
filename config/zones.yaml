@@ -1,0 +1,47 @@
+# Configuração de Zonas e Cenas do Espaço Teatral / Stand (Referencial da Sala em Metros)
+# Coordenadas: X (largura [-3.0 a +3.0]), Z (profundidade [0.5 a 6.0])
+
+room:
+  width_m: 6.0
+  depth_m: 6.0
+  max_reliable_range_m: 4.5 # Acima de 4.5m o rastreamento perde confiabilidade
+
+zones:
+  - id: "stand_total"
+    type: "stand"
+    name: "Área do Stand"
+    polygon:
+      - [-2.5, 0.8]
+      - [2.5, 0.8]
+      - [2.5, 4.5]
+      - [-2.5, 4.5]
+
+  - id: "palco_facilitador"
+    type: "palco"
+    name: "Palco / Estação do Facilitador"
+    polygon:
+      - [-1.0, 1.0]
+      - [1.0, 1.0]
+      - [1.0, 2.0]
+      - [-1.0, 2.0]
+    auto_role: "facilitador" # Quem permanece fixo nesta zona é sugerido como facilitador
+
+  - id: "area_interacao_criancas"
+    type: "plateia"
+    name: "Área de Interação / Crianças"
+    polygon:
+      - [-2.2, 2.0]
+      - [2.2, 2.0]
+      - [2.2, 4.2]
+      - [-2.2, 4.2]
+
+scenes:
+  - id: "Cena 1"
+    name: "Apresentação da Pelúcia e Aquecimento"
+    target_role: "facilitador"
+  - id: "Cena 2"
+    name: "Circulação Livre da Pelúcia"
+    target_role: "participante"
+  - id: "Cena 3"
+    name: "Desfecho e Conclusão"
+    target_role: "participante"

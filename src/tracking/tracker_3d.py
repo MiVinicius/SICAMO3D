@@ -17,19 +17,24 @@ class Track3D:
                  init_pos: Tuple[float, float, float], 
                  keypoints_3d: Optional[np.ndarray] = None,
                  keypoints_2d: Optional[np.ndarray] = None,
-                 bbox: Optional[List[float]] = None):
+                 bbox: Optional[List[float]] = None,
+                 timestamp_s: Optional[float] = None,
+                 role: str = "participante"):
         self.track_id = track_id
         self.kf = KalmanFilter3D(init_pos)
         self.hits = 1
         self.time_since_update = 0
-        self.is_confirmed = False # Exige pelo menos 2 detecções consistentes para confirmar
+        self.is_confirmed = False # Exige pelo menos 3 detecções para confirmar e evitar ruído
         
         # Filtro temporal de articulações para eliminar trepidação e linhas piscando
         self.kpt_filter = KeypointFilter(alpha=config.tracking.keypoint_smoothing_alpha, max_missed_frames=4)
         
         # Histórico de trajetória no espaço métrico real 3D (com deadzone anti-jitter)
+        cur_time = timestamp_s if timestamp_s is not None else time.time()
+        self.first_seen_time = cur_time
+        self.last_seen_time = cur_time
         self.history: deque = deque(maxlen=200)
-        self.history.append((init_pos[0], init_pos[1], init_pos[2], time.time()))
+        self.history.append((init_pos[0], init_pos[1], init_pos[2], cur_time))
 
         # Histórico 2D da linha de detecção na altura do tórax na imagem da câmera
         self.trail_history_2d: deque = deque(maxlen=200)
@@ -40,26 +45,46 @@ class Track3D:
         self.last_keypoints_3d = f_3d # (17, 4) [X, Y, Z, conf] métrico em metros
         self.last_keypoints_2d = f_2d # (17, 3) [u, v, conf] em pixels na imagem
         self.last_bbox = bbox
-        self.posture: str = "desconhecido"
-        self.held_toy: Optional[str] = None
-        self.last_seen_time = time.time()
 
-    def predict(self) -> Tuple[float, float, float]:
-        pos = self.kf.predict()
+        # Papéis e estados socioenativos
+        self.posture: str = "desconhecido"
+        self.role: str = role # 'participante', 'facilitador'
+        self.presence_state: str = "passante" # 'passante', 'plateia', 'participante_ativo'
+        self.track_state: str = "medido" # 'medido' no frame da observação, 'predito' se extrapolado
+        self.held_toy: Optional[str] = None
+        self.dwell_time_s: float = 0.0
+
+    def predict(self, dt: Optional[float] = None) -> Tuple[float, float, float]:
+        pos = self.kf.predict(dt=dt)
         self.time_since_update += 1
+        self.track_state = "predito"
         return (float(pos[0]), float(pos[1]), float(pos[2]))
 
     def update(self, 
-               pos_3d: Tuple[float, float, float], 
-               keypoints_3d: Optional[np.ndarray] = None,
-               keypoints_2d: Optional[np.ndarray] = None,
-               bbox: Optional[List[float]] = None):
+                pos_3d: Tuple[float, float, float], 
+                keypoints_3d: Optional[np.ndarray] = None,
+                keypoints_2d: Optional[np.ndarray] = None,
+                bbox: Optional[List[float]] = None,
+                timestamp_s: Optional[float] = None):
         self.kf.update(pos_3d)
         self.hits += 1
         self.time_since_update = 0
-        self.last_seen_time = time.time()
-        if self.hits >= 2:
+        self.track_state = "medido"
+        cur_time = timestamp_s if timestamp_s is not None else time.time()
+        self.last_seen_time = cur_time
+        self.dwell_time_s = max(0.0, self.last_seen_time - self.first_seen_time)
+
+        # Regra de confirmação: exige 3 hits para tracks recém-criados
+        if self.hits >= 3:
             self.is_confirmed = True
+
+        # Regra de classificação de presença baseada em tempo de permanência (dwell time)
+        if self.dwell_time_s < 2.5:
+            self.presence_state = "passante"
+        elif self.dwell_time_s < 10.0:
+            self.presence_state = "plateia"
+        else:
+            self.presence_state = "participante_ativo"
         
         cur_pos = self.kf.position
         # Deadzone de deslocamento (5 cm): elimina trepidação e o nó de linhas quando a pessoa está parada
@@ -71,7 +96,6 @@ class Track3D:
             if dist_moved >= 0.05: # Movimento real >= 5 cm
                 self.history.append((cur_pos[0], cur_pos[1], cur_pos[2], self.last_seen_time))
             else:
-                # Amortece suavemente a ponta sem empilhar pontos estáticos
                 self.history[-1] = (
                     0.80 * last_p[0] + 0.20 * cur_pos[0],
                     0.80 * last_p[1] + 0.20 * cur_pos[1],
@@ -79,7 +103,7 @@ class Track3D:
                     self.last_seen_time
                 )
 
-        # Rastreamento 2D da linha de detecção na altura exata do tórax / peito
+        # Rastreamento 2D da linha de detecção na altura do tórax
         cx, cy = None, None
         if keypoints_2d is not None:
             sh_pts = []
@@ -87,7 +111,6 @@ class Track3D:
             if keypoints_2d[6, 2] > 0.18: sh_pts.append(keypoints_2d[6, :2])
             if sh_pts:
                 sh_mean = np.mean(sh_pts, axis=0)
-                # Se quadris estiverem visíveis, posiciona no tórax (30% da distância dos ombros aos quadris)
                 hip_pts = []
                 if keypoints_2d[11, 2] > 0.18: hip_pts.append(keypoints_2d[11, :2])
                 if keypoints_2d[12, 2] > 0.18: hip_pts.append(keypoints_2d[12, :2])
@@ -95,11 +118,9 @@ class Track3D:
                     hip_mean = np.mean(hip_pts, axis=0)
                     chest = 0.70 * sh_mean + 0.30 * hip_mean
                 else:
-                    # Estimativa anatômica abaixo dos ombros
                     chest = sh_mean + np.array([0.0, 18.0])
                 cx, cy = float(chest[0]), float(chest[1])
         if cx is None and bbox is not None:
-            # Caixa delimitadora: tórax fica a ~28% do topo da caixa
             cx = float((bbox[0] + bbox[2]) / 2.0)
             cy = float(bbox[1] + 0.28 * (bbox[3] - bbox[1]))
 
@@ -108,7 +129,7 @@ class Track3D:
                 self.trail_history_2d.append((cx, cy))
             else:
                 lcx, lcy = self.trail_history_2d[-1]
-                if np.hypot(cx - lcx, cy - lcy) >= 5.0: # Movimento real >= 5 pixels
+                if np.hypot(cx - lcx, cy - lcy) >= 5.0:
                     self.trail_history_2d.append((cx, cy))
                 else:
                     self.trail_history_2d[-1] = (0.80 * lcx + 0.20 * cx, 0.80 * lcy + 0.20 * cy)
@@ -135,6 +156,10 @@ class Track3D:
         return self.kf.speed
 
     @property
+    def ground_speed(self) -> float:
+        return self.kf.ground_speed
+
+    @property
     def hands_3d(self) -> Tuple[Optional[Tuple[float, float, float]], Optional[Tuple[float, float, float]]]:
         """Retorna coordenadas 3D métricas da mão esquerda (idx 9) e mão direita (idx 10)."""
         if self.last_keypoints_3d is None:
@@ -142,7 +167,6 @@ class Track3D:
         
         left_hand = None
         right_hand = None
-        # COCO Keypoints: 9 = left_wrist, 10 = right_wrist
         if self.last_keypoints_3d[9, 3] > 0.18 and self.last_keypoints_3d[9, 2] > 0.35:
             left_hand = (float(self.last_keypoints_3d[9, 0]), 
                          float(self.last_keypoints_3d[9, 1]), 
@@ -169,18 +193,28 @@ class Tracker3D:
         self.max_lost_frames = max_lost_frames
         self.tracks: List[Track3D] = []
         self._next_id = 1
+        self._last_timestamp_s: Optional[float] = None
 
-    def update(self, detections: List[Dict]) -> List[Track3D]:
+    def update(self, detections: List[Dict], timestamp_s: Optional[float] = None) -> List[Track3D]:
         """
         Associa detecções 3D aos tracks existentes usando o Algoritmo Húngaro (Munkres)
-        com restrição de distância euclidiana para evitar que alvos próximos troquem de ID.
+        com restrição de distância euclidiana, cálculo de dt dinâmico e supressão de fantasmas.
         """
-        # 1. Predição para todos os tracks ativos
+        cur_t = timestamp_s if timestamp_s is not None else time.time()
+        dt = (cur_t - self._last_timestamp_s) if (self._last_timestamp_s is not None) else (1.0 / 30.0)
+        self._last_timestamp_s = cur_t
+
+        # 1. Predição para todos os tracks com dt dinâmico
         for trk in self.tracks:
-            trk.predict()
+            trk.predict(dt=dt)
 
         if len(detections) == 0:
-            self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_lost_frames]
+            # Limpa tracks que ficaram sem observação
+            # Tracks não confirmados são descartados em apenas 5 frames para não virarem fantasmas
+            self.tracks = [
+                t for t in self.tracks 
+                if (t.time_since_update <= (self.max_lost_frames if t.is_confirmed else 5))
+            ]
             return [t for t in self.tracks if t.is_confirmed]
 
         # 2. Constrói matriz de custo com distância euclidiana 3D
@@ -208,7 +242,8 @@ class Tracker3D:
                         detections[c]['pos_3d'], 
                         detections[c].get('keypoints_3d'),
                         detections[c].get('keypoints_2d'),
-                        detections[c].get('bbox')
+                        detections[c].get('bbox'),
+                        timestamp_s=cur_t
                     )
                     assigned_tracks.add(r)
                     assigned_dets.add(c)
@@ -216,28 +251,39 @@ class Tracker3D:
             # Detecções não associadas viram novos candidatos a tracks
             for d_idx in range(num_dets):
                 if d_idx not in assigned_dets:
+                    role = detections[d_idx].get('role', 'participante')
                     new_track = Track3D(
                         self._next_id, 
                         detections[d_idx]['pos_3d'], 
                         detections[d_idx].get('keypoints_3d'),
                         detections[d_idx].get('keypoints_2d'),
-                        detections[d_idx].get('bbox')
+                        detections[d_idx].get('bbox'),
+                        timestamp_s=cur_t,
+                        role=role
                     )
                     self._next_id += 1
                     self.tracks.append(new_track)
         else:
             for det in detections:
+                role = det.get('role', 'participante')
                 new_track = Track3D(
                     self._next_id, 
                     det['pos_3d'], 
                     det.get('keypoints_3d'),
                     det.get('keypoints_2d'),
-                    det.get('bbox')
+                    det.get('bbox'),
+                    timestamp_s=cur_t,
+                    role=role
                 )
                 self._next_id += 1
                 self.tracks.append(new_track)
 
-        # 3. Limpeza de tracks perdidos por muito tempo
-        self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_lost_frames]
+        # 3. Limpeza de tracks perdidos (fantasmas não confirmados morrem rápido em 5 frames)
+        self.tracks = [
+            t for t in self.tracks 
+            if (t.time_since_update <= (self.max_lost_frames if t.is_confirmed else 5))
+        ]
 
+        # Retorna apenas tracks confirmados para garantir dados limpos ao dashboard e métricas
         return [t for t in self.tracks if t.is_confirmed]
+

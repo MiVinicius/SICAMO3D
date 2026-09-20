@@ -8,7 +8,7 @@ from typing import Optional, Tuple, List, Dict
 from pykinect2 import PyKinectV2, PyKinectRuntime
 
 class KinectSensor:
-    def __init__(self):
+    def __init__(self, calibration: Optional["RoomCalibration"] = None):
         self._sources = (PyKinectV2.FrameSourceTypes_Color | 
                          PyKinectV2.FrameSourceTypes_Depth | 
                          PyKinectV2.FrameSourceTypes_Body)
@@ -23,6 +23,7 @@ class KinectSensor:
         self.last_color_bgr: Optional[np.ndarray] = None
         self.last_depth_mm: Optional[np.ndarray] = None
         self.floor_clip_plane: Optional[Tuple[float, float, float, float]] = None
+        self.room_calibration: Optional["RoomCalibration"] = calibration
 
         # Parâmetros intrínsecos do modelo pinhole de profundidade do Kinect v2 pré-calculados
         self.fx = 365.7
@@ -66,10 +67,22 @@ class KinectSensor:
             return False
         return has_new_color
 
-    def get_3d_point_from_color(self, u: float, v: float) -> Optional[Tuple[float, float, float]]:
+    def set_room_calibration(self, calibration: "RoomCalibration"):
+        self.room_calibration = calibration
+
+
+    def get_auto_calibration(self) -> Optional["RoomCalibration"]:
+        """Retorna calibração automática estimada a partir do plano do chão detectado."""
+        if self.floor_clip_plane is not None:
+            from src.core.room_calibration import RoomCalibration
+            return RoomCalibration.from_floor_plane(self.floor_clip_plane)
+        return None
+
+    def get_3d_point_from_color(self, u: float, v: float, to_room: bool = False) -> Optional[Tuple[float, float, float]]:
         """
         Mapeia um pixel da imagem colorida (u: 0..1920, v: 0..1080) para a coordenada métrica 3D
-        no espaço da câmera (X, Y, Z em metros) com alta performance.
+        no espaço da câmera (ou da sala se to_room=True) em metros com alta performance.
+        Retorna None se o ponto for inválido ou ocluso.
         """
         if self.last_depth_mm is None:
             return None
@@ -91,26 +104,32 @@ class KinectSensor:
             y_m = (dv - self.cy) * depth_m / self.fy
             z_m = depth_m
 
-            return (float(x_m), float(y_m), float(z_m))
+            pt_cam = (float(x_m), float(y_m), float(z_m))
+            if to_room and self.room_calibration is not None and self.room_calibration.is_calibrated:
+                pt_room = self.room_calibration.camera_to_room(pt_cam)
+                return (float(pt_room[0]), float(pt_room[1]), float(pt_room[2]))
+            return pt_cam
         except Exception:
             return None
 
-    def unproject_keypoints_3d(self, keypoints_2d: np.ndarray) -> np.ndarray:
+    def unproject_keypoints_3d(self, keypoints_2d: np.ndarray, to_room: bool = False) -> np.ndarray:
         """
         Recebe matriz (17, 3) onde cada linha é [u, v, conf].
         Retorna matriz (17, 4) onde cada linha é [X, Y, Z, conf] em metros reais.
+        Articulações sem profundidade válida recebem NaN nas coordenadas (em vez de 0.0).
         """
-        kpts_3d = np.zeros((17, 4), dtype=np.float32)
+        kpts_3d = np.full((17, 4), np.nan, dtype=np.float32)
         for i in range(17):
             u, v, conf = keypoints_2d[i]
             kpts_3d[i, 3] = conf
-            if conf > 0.25:
-                pt_3d = self.get_3d_point_from_color(u, v)
+            if conf > 0.20:
+                pt_3d = self.get_3d_point_from_color(u, v, to_room=to_room)
                 if pt_3d is not None:
                     kpts_3d[i, 0] = pt_3d[0]
                     kpts_3d[i, 1] = pt_3d[1]
                     kpts_3d[i, 2] = pt_3d[2]
         return kpts_3d
+
 
     def close(self):
         """Libera o sensor e recursos COM."""
