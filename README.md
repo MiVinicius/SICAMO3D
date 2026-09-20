@@ -1,4 +1,4 @@
-# SICAMO3D: Sistema de Rastreamento Socioenativo 3D (v0.2.0)
+# SICAMO3D: Sistema de Inferência com Captura de Movimento de Objetos em Ambiente 3D (v0.2.0)
 ### Rastreamento de Pessoas, Pelúcia Móvel e Análise de Cenas Teatrais em Tempo Real
 
 [![Versão](https://img.shields.io/badge/Versão-v0.2.0-brightgreen.svg)](https://github.com)
@@ -13,7 +13,8 @@
 
 ## 📖 Visão Geral
 
-O **SICAMO3D** é uma plataforma de pesquisa científica e monitoramento socioenativo 3D em tempo real, desenvolvida nativamente para **Windows 11** com aceleração por hardware via **DirectML (DirectX 12)** em GPUs **AMD Radeon RX 6600** (e nós secundários com GPUs NVIDIA/Intel).
+O **SICAMO3D** (**S**istema de **I**nferência com **CA**ptura de **M**ovimento de **O**bjetos em Ambiente **3D**) é uma plataforma de pesquisa científica e monitoramento socioenativo em tempo real, desenvolvida nativamente para **Windows 11** com aceleração por hardware via **DirectML (DirectX 12)** em GPUs **AMD Radeon RX 6600** (e nós secundários com GPUs NVIDIA/Intel).
+
 
 O sistema estrutura-se em torno do paradigma: **Pessoas + Artefato Móvel Único (Pelúcia do Espetáculo) + Cenas Teatrais**, com portador exclusivo por vez, detecção de passagens de posse, papéis e zonas no espaço físico:
 

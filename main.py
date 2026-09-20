@@ -1,5 +1,5 @@
 """
-Ponto de entrada principal: Sistema de Rastreamento Socioenativo 3D da Pelúcia Móvel (SICAMO3D v0.2.0)
+Ponto de entrada principal: Sistema de Inferência com Captura de Movimento de Objetos em Ambiente 3D (SICAMO3D v0.2.0)
 Nativo para Windows 11 com aceleração DirectML (DirectX 12).
 """
 import time
@@ -16,9 +16,10 @@ def main():
     # Ativa precisão de 1ms no temporizador do Windows kernel (reduz cv2.waitKey de 16.7ms para 1.8ms)
     ctypes.windll.winmm.timeBeginPeriod(1)
 
-    print("=" * 75)
-    print(f"SICAMO3D: SISTEMA SOCIOENATIVO 3D - PELÚCIA MÓVEL E CENAS (v{config.version})")
-    print("=" * 75)
+    print("=" * 80)
+    print(f"SICAMO3D: SISTEMA DE INFERÊNCIA COM CAPTURA DE MOVIMENTO DE OBJETOS 3D (v{config.version})")
+    print("=" * 80)
+
 
     # 1. Inicializa o Pipeline Central
     print("\n[1/3] Inicializando Pipeline Central (Kinect v2, DirectML, Tracker3D, HolderInference)...")
