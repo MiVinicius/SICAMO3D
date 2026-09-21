@@ -3,7 +3,7 @@ Filtro de suavização temporal (EMA adaptativo com amortecimento de oclusão)
 para articulações 2D e 3D do esqueleto. Elimina trepidação, jitter e linhas piscando.
 """
 import numpy as np
-from typing import Optional
+from typing import Optional, Any
 
 class KeypointFilter:
     def __init__(self, alpha: float = 0.65, max_missed_frames: int = 4):
@@ -23,7 +23,8 @@ class KeypointFilter:
         filtered_3d = self._filter_3d(new_kpts_3d) if new_kpts_3d is not None else None
         return filtered_2d, filtered_3d
 
-    def _filter_2d(self, new_kpts: np.ndarray) -> np.ndarray:
+    def _filter_2d(self, new_kpts: Any) -> np.ndarray:
+        new_kpts = np.asarray(new_kpts, dtype=np.float32)
         if self.prev_kpts_2d is None:
             self.prev_kpts_2d = np.copy(new_kpts)
             return new_kpts
@@ -50,7 +51,8 @@ class KeypointFilter:
         self.prev_kpts_2d = np.copy(result)
         return result
 
-    def _filter_3d(self, new_kpts: np.ndarray) -> np.ndarray:
+    def _filter_3d(self, new_kpts: Any) -> np.ndarray:
+        new_kpts = np.asarray(new_kpts, dtype=np.float32)
         if self.prev_kpts_3d is None:
             self.prev_kpts_3d = np.copy(new_kpts)
             return new_kpts

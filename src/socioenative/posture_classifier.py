@@ -57,22 +57,22 @@ class PostureClassifier:
         if y_joelhos and y_tornozelos:
             my_joelho = np.mean(y_joelhos)
             my_tornozelo = np.mean(y_tornozelos)
-            altura_perna = abs(my_tornozelo - my_quadril)
-
-            # Relação tronco / perna
-            # Se pernas estão recolhidas / quadril quase na altura dos tornozelos:
             dist_quadril_tornozelo = abs(my_quadril - my_tornozelo)
             
-            if dist_quadril_tornozelo < 0.35: # Menos de 35 cm entre quadril e tornozelos
+            # Razão normalizada em relação ao tronco (invariante à estatura infantil ou adulta)
+            ref_tronco = max(0.20, altura_tronco)
+            ratio_perna_tronco = dist_quadril_tornozelo / ref_tronco
+
+            # Se quadril está muito baixo em relação ao chão ou pernas recolhidas
+            if my_quadril < 0.35 or ratio_perna_tronco < 0.65:
                 return "sentado_chao"
-            elif dist_quadril_tornozelo < 0.55 and abs(my_quadril - my_joelho) < 0.25:
+            elif ratio_perna_tronco < 1.05 and abs(my_quadril - my_joelho) < (0.50 * ref_tronco):
                 return "agachado"
 
-        # Inclinação do tronco (debruçado sobre brinquedo ou mesa)
-        # Diferença em profundidade (Z) ou lateral (X) entre ombro e quadril
-        z_ombro = keypoints_3d[5:7, 2].mean()
-        z_quadril = keypoints_3d[11:13, 2].mean()
-        if abs(z_ombro - z_quadril) > 0.35 and altura_tronco < 0.35:
+        # Inclinação do tronco (debruçado sobre a pelúcia ou mesa)
+        z_ombro = np.nanmean(keypoints_3d[5:7, 2])
+        z_quadril = np.nanmean(keypoints_3d[11:13, 2])
+        if abs(z_ombro - z_quadril) > 0.30 and altura_tronco < 0.30:
             return "debruçado"
 
         return "em_pe"

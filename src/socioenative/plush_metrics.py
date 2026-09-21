@@ -40,12 +40,17 @@ class PlushMetricsAnalyzer:
 
     def update(self, 
                tracks: List, 
-               holder_result: Dict[str, Any], 
+               holder_result: Optional[Dict[str, Any]] = None, 
                scene_id: Optional[str] = None, 
-               timestamp_s: Optional[float] = None):
+               timestamp_s: Optional[float] = None,
+               **kwargs):
         """
         Atualiza acumuladores de tempo e métricas para o frame atual.
+        Aceita tanto holder_result quanto holder_info como parâmetro.
         """
+        if holder_result is None:
+            holder_result = kwargs.get("holder_info", {})
+
         if scene_id is not None:
             self.active_scene_id = scene_id
         self._ensure_scene_exists(self.active_scene_id)
@@ -56,10 +61,17 @@ class PlushMetricsAnalyzer:
         dt = min(dt, 0.20) # Limita dt para não distorcer em pausas
         self._last_update_time = cur_t
 
-        # 1. Acumula tempo de presença para todos os participantes confirmados
+        if "roles" not in sc_data:
+            sc_data["roles"] = {}
+        if "presence_states" not in sc_data:
+            sc_data["presence_states"] = {}
+
+        # 1. Acumula tempo de presença para participantes confirmados
         for trk in tracks:
             t_id = trk.track_id
             sc_data["dwell_times"][t_id] = sc_data["dwell_times"].get(t_id, 0.0) + dt
+            sc_data["roles"][t_id] = getattr(trk, "role", "participante")
+            sc_data["presence_states"][t_id] = getattr(trk, "presence_state", "participante_ativo")
 
         # 2. Acumula tempo de posse do portador atual
         holder_id = holder_result.get("holder_id")
@@ -87,18 +99,18 @@ class PlushMetricsAnalyzer:
                 for trk in tracks:
                     if trk.track_id == holder_id:
                         continue
-                    # Apenas participantes com papel 'participante' ou 'plateia'
-                    if trk.role == "facilitador":
+                    # Apenas participantes com papel 'participante' (não facilitadores)
+                    if getattr(trk, "role", "participante") == "facilitador":
                         continue
 
                     total_audience += 1
                     px, _, pz = trk.position
-                    # Vetor participante -> portador
+                    # Vetor participante -> portador no plano X-Z
                     dx = hx - px
                     dz = hz - pz
                     angle_to_holder_deg = math.degrees(math.atan2(dx, dz))
 
-                    # Heading corporal do participante: calculado a partir dos ombros ou vetor de velocidade
+                    # Heading corporal do participante: calculado a partir dos ombros
                     heading_deg = self._estimate_person_heading(trk)
                     if heading_deg is not None:
                         angular_diff = abs((heading_deg - angle_to_holder_deg + 180) % 360 - 180)
@@ -116,18 +128,28 @@ class PlushMetricsAnalyzer:
                     })
 
     def _estimate_person_heading(self, trk) -> Optional[float]:
-        """Estima o ângulo de orientação corporal (heading em graus) a partir dos ombros no plano X-Z."""
+        """
+        Estima o ângulo de orientação corporal (heading em graus) a partir dos ombros no plano X-Z da sala.
+        Convenção dextra: +X para a direita, +Z para frente (fundo da sala).
+        0° = voltado para o fundo da sala (+Z).
+        180°/-180° = voltado para a câmera (-Z).
+        +90° = voltado para a direita (+X).
+        -90° = voltado para a esquerda (-X).
+        """
         if trk.last_keypoints_3d is not None:
             k3d = trk.last_keypoints_3d
-            # Ombros: 5 (esq), 6 (dir)
+            # Ombros: 5 (esq anatômico), 6 (dir anatômico)
             if k3d[5, 3] > 0.20 and k3d[6, 3] > 0.20:
                 sx_l, sz_l = k3d[5, 0], k3d[5, 2]
                 sx_r, sz_r = k3d[6, 0], k3d[6, 2]
                 if not (np.isnan(sx_l) or np.isnan(sx_r) or np.isnan(sz_l) or np.isnan(sz_r)):
                     # Vetor ombro direito -> ombro esquerdo
                     v_shoulders = np.array([sx_l - sx_r, sz_l - sz_r])
-                    # O peito / frente aponta ortogonal a v_shoulders (girado 90 graus)
-                    v_facing = np.array([-v_shoulders[1], v_shoulders[0]])
+                    # O peito aponta ortogonal a v_shoulders:
+                    # Quando olhando para +Z (costas para câmera), ombro esquerdo tem x_l < x_r (à esquerda visual),
+                    # então v_shoulders[0] < 0. Queremos v_facing[1] > 0 (+Z).
+                    # Logo: v_facing = (v_shoulders[1], -v_shoulders[0])
+                    v_facing = np.array([v_shoulders[1], -v_shoulders[0]])
                     return float(math.degrees(math.atan2(v_facing[0], v_facing[1])))
 
         # Fallback: direção do vetor velocidade se estiver andando
@@ -135,6 +157,7 @@ class PlushMetricsAnalyzer:
         if math.hypot(vx, vz) > 0.20:
             return float(math.degrees(math.atan2(vx, vz)))
         return None
+
 
     def compute_gini(self, values: List[float]) -> float:
         """
@@ -163,15 +186,30 @@ class PlushMetricsAnalyzer:
         participants_data = []
         possession_list = []
         norm_possession_list = []
+        audience_possession_list = []
+        audience_norm_possession_list = []
+        facilitator_possession_s = 0.0
 
         for tid in all_track_ids:
             dwell = sc["dwell_times"].get(tid, 0.0)
             poss = sc["possession_times"].get(tid, 0.0)
+            role = sc.get("roles", {}).get(tid, "participante")
+            presence = sc.get("presence_states", {}).get(tid, "participante_ativo")
             norm_poss = (poss / dwell) if dwell > 0.5 else 0.0
+
             possession_list.append(poss)
             norm_possession_list.append(norm_poss)
+
+            if role == "facilitador":
+                facilitator_possession_s += poss
+            else:
+                audience_possession_list.append(poss)
+                audience_norm_possession_list.append(norm_poss)
+
             participants_data.append({
                 "track_id": tid,
+                "role": role,
+                "presence_state": presence,
                 "dwell_time_s": round(dwell, 1),
                 "possession_time_s": round(poss, 1),
                 "norm_possession_ratio": round(norm_poss, 3)
@@ -188,9 +226,10 @@ class PlushMetricsAnalyzer:
                 transition_matrix[d_id][r_id] = transition_matrix[d_id].get(r_id, 0) + 1
 
         # Portadores distintos
-        distinct_holders = len([p for p in possession_list if p >= 1.0])
-        total_participants = len(all_track_ids)
-        circulation_ratio = (distinct_holders / total_participants) if total_participants > 0 else 0.0
+        distinct_holders_all = len([p for p in possession_list if p >= 0.5])
+        distinct_audience_holders = len([p for p in audience_possession_list if p >= 0.5])
+        total_audience_participants = len(audience_possession_list)
+        circulation_ratio = (distinct_audience_holders / total_audience_participants) if total_audience_participants > 0 else 0.0
 
         # Atenção média da plateia
         att_samples = sc["attention_samples"]
@@ -199,11 +238,15 @@ class PlushMetricsAnalyzer:
 
         return {
             "scene_id": target_scene,
-            "total_participants": total_participants,
-            "distinct_holders": distinct_holders,
+            "total_participants": len(all_track_ids),
+            "total_audience_participants": total_audience_participants,
+            "distinct_holders": distinct_holders_all,
+            "distinct_audience_holders": distinct_audience_holders,
             "circulation_ratio": round(circulation_ratio, 3),
-            "gini_possession": round(self.compute_gini(possession_list), 3),
-            "gini_normalized": round(self.compute_gini(norm_possession_list), 3),
+            "gini_possession_audience": round(self.compute_gini(audience_possession_list), 3),
+            "gini_possession_all": round(self.compute_gini(possession_list), 3),
+            "gini_normalized_audience": round(self.compute_gini(audience_norm_possession_list), 3),
+            "facilitator_possession_time_s": round(facilitator_possession_s, 1),
             "handoff_count": len(sc["handoffs"]),
             "transition_matrix": transition_matrix,
             "avg_audience_attention_35deg": round(avg_attention_35, 3),
@@ -211,3 +254,4 @@ class PlushMetricsAnalyzer:
             "participants": participants_data,
             "handoff_events": list(sc["handoffs"])
         }
+

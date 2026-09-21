@@ -61,6 +61,7 @@ class Dashboard3D:
                show_hud_help: bool = False,
                scene_id: str = "Cena 1",
                holder_id: Optional[int] = None,
+               selected_track_id: Optional[int] = None,
                gpu_name: str = "DirectML (DirectX 12)",
                zones: Optional[List[Dict]] = None) -> np.ndarray:
         """
@@ -73,7 +74,7 @@ class Dashboard3D:
         # MODO 2: PLANTA BAIXA 3D EXPANDIDA EM TELA CHEIA (1600 x 900)
         # =========================================================================
         if view_mode == 2:
-            self.canvas.fill(18) # Fundo escuro elegante
+            self.canvas.fill(18)  # Fundo escuro elegante
             self._draw_floor_view(
                 target_img=self.canvas,
                 tracks=tracks,
@@ -85,7 +86,9 @@ class Dashboard3D:
                 ppm=110.0,
                 depth_clusters=depth_clusters,
                 show_trajectories=show_trajectories,
-                is_fullscreen=True
+                is_fullscreen=True,
+                selected_track_id=selected_track_id,
+                zones=zones
             )
             # Cabeçalho flutuante
             hdr = f"PLANTA BAIXA 3D (TELA CHEIA) | FPS: {fps:.1f} | Pessoas: {len(tracks)} | [1] Voltar [M] Ajuda"
@@ -109,7 +112,8 @@ class Dashboard3D:
                 scale_y=900.0 / color_bgr.shape[0],
                 show_trajectories=show_trajectories,
                 skeleton_mode=skeleton_mode,
-                is_fullscreen=True
+                is_fullscreen=True,
+                selected_track_id=selected_track_id
             )
             # Miniatura PiP da mão no canto superior direito
             self._draw_pip_window(
@@ -143,7 +147,8 @@ class Dashboard3D:
             scale_y=540.0 / color_bgr.shape[0],
             show_trajectories=show_trajectories,
             skeleton_mode=skeleton_mode,
-            is_fullscreen=False
+            is_fullscreen=False,
+            selected_track_id=selected_track_id
         )
 
         # 2. Painel Direito Superior: Planta Baixa 3D da Sala (640 x 540)
@@ -161,7 +166,9 @@ class Dashboard3D:
             ppm=70.0,
             depth_clusters=depth_clusters,
             show_trajectories=show_trajectories,
-            is_fullscreen=False
+            is_fullscreen=False,
+            selected_track_id=selected_track_id,
+            zones=zones
         )
         cv2.putText(floor_view, "PLANTA BAIXA 3D (SALA)", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
@@ -211,7 +218,8 @@ class Dashboard3D:
                           scale_y: float, 
                           show_trajectories: bool, 
                           skeleton_mode: int,
-                          is_fullscreen: bool):
+                          is_fullscreen: bool,
+                          selected_track_id: Optional[int] = None):
         """Renderiza esqueletos, caixas e trilhas neon reprojetadas na imagem da câmera."""
         # 1. Desenha brinquedos e objetos
         for toy in toys:
@@ -240,16 +248,16 @@ class Dashboard3D:
         # 2. Desenha pessoas, esqueletos e trilhas neon
         for trk in tracks:
             color = self.id_colors[(trk.track_id - 1) % len(self.id_colors)]
+            is_selected = (trk.track_id == selected_track_id)
             
             # Trilha Neon com decaimento temporal na altura do tórax
             if show_trajectories:
-                # Prioridade 1: Rastro 2D direto na altura do tórax/peito
                 trail_pts = getattr(trk, 'trail_history_2d', None) or getattr(trk, 'feet_history_2d', None)
                 if trail_pts and len(trail_pts) > 1:
                     t_pts = list(trail_pts)
                     n_pts = len(t_pts)
                     for i in range(1, n_pts):
-                        decay = float(i) / float(n_pts) # 0.0 mais antigo -> 1.0 mais recente
+                        decay = float(i) / float(n_pts)
                         c_fade = tuple(int(c * (0.20 + 0.80 * decay)) for c in color)
                         th = 1 if decay < 0.6 else (3 if is_fullscreen else 2)
 
@@ -261,28 +269,13 @@ class Dashboard3D:
                         if 0 <= u0 < target_img.shape[1] and 0 <= v0 < target_img.shape[0] and \
                            0 <= u1 < target_img.shape[1] and 0 <= v1 < target_img.shape[0]:
                             cv2.line(target_img, (u0, v0), (u1, v1), c_fade, th)
-                elif len(trk.history) > 1:
-                    # Fallback com projeção da pelve
-                    pts = list(trk.history)
-                    n_pts = len(pts)
-                    for i in range(1, n_pts):
-                        decay = float(i) / float(n_pts)
-                        c_fade = tuple(int(c * (0.20 + 0.80 * decay)) for c in color)
-                        th = 1 if decay < 0.6 else (3 if is_fullscreen else 2)
-                        p0, p1 = pts[i-1], pts[i]
-                        if p0[2] > 0.4 and p1[2] > 0.4:
-                            u0 = int((960.0 + 1060.0 * p0[0] / p0[2]) * scale_x)
-                            v0 = int((540.0 + 1060.0 * (p0[1] + 0.35) / p0[2]) * scale_y)
-                            u1 = int((960.0 + 1060.0 * p1[0] / p1[2]) * scale_x)
-                            v1 = int((540.0 + 1060.0 * (p1[1] + 0.35) / p1[2]) * scale_y)
-                            if 0 <= u0 < target_img.shape[1] and 0 <= v0 < target_img.shape[0] and \
-                               0 <= u1 < target_img.shape[1] and 0 <= v1 < target_img.shape[0]:
-                                cv2.line(target_img, (u0, v0), (u1, v1), c_fade, th)
 
             # Caixa delimitadora
             if trk.last_bbox is not None and skeleton_mode > 0:
                 bx1, by1, bx2, by2 = [int(v * (scale_x if i%2==0 else scale_y)) for i, v in enumerate(trk.last_bbox)]
-                cv2.rectangle(target_img, (bx1, by1), (bx2, by2), color, 2)
+                cv2.rectangle(target_img, (bx1, by1), (bx2, by2), (0, 215, 255) if is_selected else color, 3 if is_selected else 2)
+                if is_selected:
+                    cv2.putText(target_img, "[SELECIONADO]", (bx1, max(38, by1 - 28)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 215, 255), 2)
 
             # Esqueleto COCO
             if trk.last_keypoints_2d is not None and skeleton_mode == 2:
@@ -298,7 +291,6 @@ class Dashboard3D:
             # Mãos destacadas (se skeleton_mode >= 1)
             if skeleton_mode >= 1:
                 left_2d, right_2d = trk.hands_2d
-                left_3d, right_3d = trk.hands_3d
                 if left_2d is not None:
                     hx, hy = int(left_2d[0] * scale_x), int(left_2d[1] * scale_y)
                     cv2.circle(target_img, (hx, hy), 7, (0, 255, 255), -1)
@@ -330,8 +322,121 @@ class Dashboard3D:
                          ppm: float,
                          depth_clusters: Optional[List[Dict]],
                          show_trajectories: bool,
-                         is_fullscreen: bool):
-        """Renderiza a planta baixa 3D métrica com trilhas neon e conexões socioenativas."""
+                         is_fullscreen: bool,
+                         selected_track_id: Optional[int] = None,
+                         zones: Optional[List[Dict]] = None):
+        """Renderiza a planta baixa 3D métrica com trilhas neon, zonas do espetáculo e conexões socioenativas."""
+        max_h, max_w = target_img.shape[:2]
+
+        # 1. Zonas do Espaço Teatral (Palco, Plateia, Stand)
+        if zones:
+            for z_def in zones:
+                poly = z_def.get("polygon", [])
+                if len(poly) >= 3:
+                    pts_screen = []
+                    for pt in poly:
+                        zx, zz = pt[0], pt[1]
+                        pts_screen.append([int(grid_cx + zx * ppm), int(grid_origin_y - zz * ppm)])
+                    pts_arr = np.array(pts_screen, dtype=np.int32)
+                    
+                    ztype = z_def.get("type", "")
+                    if ztype == "palco":
+                        z_col = (210, 150, 40)
+                    elif ztype == "plateia":
+                        z_col = (60, 180, 80)
+                    else:
+                        z_col = (70, 70, 70)
+
+                    cv2.polylines(target_img, [pts_arr], isClosed=True, color=z_col, thickness=2)
+                    label_pos = (max(20, pts_screen[0][0] + 6), max(20, pts_screen[0][1] + 18))
+                    cv2.putText(target_img, z_def.get("name", ztype), label_pos, 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.40 if is_fullscreen else 0.34, z_col, 1)
+
+        # Grade métrica concêntrica
+        for m in range(1, int(self.room_d) + 2):
+            y_line = int(grid_origin_y - m * ppm)
+            if 0 < y_line < max_h:
+                cv2.line(target_img, (20, y_line), (max_w - 20, y_line), (40, 40, 40), 1)
+                cv2.putText(target_img, f"{m}m", (25, y_line - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (100, 100, 100), 1)
+
+        # Câmera Kinect
+        cv2.circle(target_img, (grid_cx, grid_origin_y), 9, (0, 200, 255), -1)
+        cv2.putText(target_img, "KINECT v2", (grid_cx - 40, grid_origin_y + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1)
+        # Cone FOV
+        fov_w = int(240 * (ppm / 70.0))
+        cv2.line(target_img, (grid_cx, grid_origin_y), (grid_cx - fov_w, 60), (60, 60, 60), 1)
+        cv2.line(target_img, (grid_cx, grid_origin_y), (grid_cx + fov_w, 60), (60, 60, 60), 1)
+
+        # Brinquedos na sala
+        for toy in toys:
+            tx, ty, tz = toy['pos_3d']
+            map_x = int(grid_cx + tx * ppm)
+            map_y = int(grid_origin_y - tz * ppm)
+            if 0 < map_x < max_w and 0 < map_y < max_h:
+                cv2.rectangle(target_img, (map_x - 8, map_y - 8), (map_x + 8, map_y + 8), (0, 215, 255), -1)
+                cv2.putText(target_img, toy['class_name'], (map_x + 11, map_y + 4), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.44 if is_fullscreen else 0.40, (0, 215, 255), 1)
+
+        # Clusters 3D de profundidade (Fase 4)
+        if depth_clusters:
+            for dc in depth_clusters:
+                cx, cy, cz = dc['centroid_3d']
+                dc_x = int(grid_cx + cx * ppm)
+                dc_y = int(grid_origin_y - cz * ppm)
+                r_cluster = max(4, int((dc['diameter_m'] * ppm) / 2))
+                cv2.circle(target_img, (dc_x, dc_y), r_cluster, (0, 255, 120), 1)
+
+        # Pessoas, trajetórias neon e mãos
+        for trk in tracks:
+            color = self.id_colors[(trk.track_id - 1) % len(self.id_colors)]
+            pts = list(trk.history)
+            is_selected = (trk.track_id == selected_track_id)
+
+            # Rastro de trajetória neon com decaimento temporal
+            if show_trajectories and len(pts) > 1:
+                n_pts = len(pts)
+                for i in range(1, n_pts):
+                    decay = float(i) / float(n_pts)
+                    c_fade = tuple(int(c * (0.2 + 0.8 * decay)) for c in color)
+                    th = 1 if decay < 0.6 else (3 if is_fullscreen else 2)
+
+                    p_prev = (int(grid_cx + pts[i-1][0] * ppm), int(grid_origin_y - pts[i-1][2] * ppm))
+                    p_curr = (int(grid_cx + pts[i][0] * ppm), int(grid_origin_y - pts[i][2] * ppm))
+                    cv2.line(target_img, p_prev, p_curr, c_fade, th)
+
+            # Posição central do indivíduo
+            px, py, pz = trk.position
+            cur_x = int(grid_cx + px * ppm)
+            cur_y = int(grid_origin_y - pz * ppm)
+            if 0 < cur_x < max_w and 0 < cur_y < max_h:
+                if is_selected:
+                    cv2.circle(target_img, (cur_x, cur_y), 20 if is_fullscreen else 16, (0, 215, 255), 3)
+                    cv2.putText(target_img, "[SEL]", (cur_x - 18, cur_y - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 215, 255), 1)
+
+                cv2.circle(target_img, (cur_x, cur_y), 11 if is_fullscreen else 9, color, -1)
+                cv2.circle(target_img, (cur_x, cur_y), 15 if is_fullscreen else 12, (255, 255, 255), 2)
+                cv2.putText(target_img, f"ID #{trk.track_id}", (cur_x + 14, cur_y + 4), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.50 if is_fullscreen else 0.44, (255, 255, 255), 2)
+
+            # Mãos 3D no chão
+            lh, rh = trk.hands_3d
+            if lh is not None:
+                lx, ly = int(grid_cx + lh[0] * ppm), int(grid_origin_y - lh[2] * ppm)
+                if 0 < lx < max_w and 0 < ly < max_h:
+                    cv2.circle(target_img, (lx, ly), 4, (0, 255, 255), -1)
+            if rh is not None:
+                rx, ry = int(grid_cx + rh[0] * ppm), int(grid_origin_y - rh[2] * ppm)
+                if 0 < rx < max_w and 0 < ry < max_h:
+                    cv2.circle(target_img, (rx, ry), 4, (0, 255, 255), -1)
+
+        # Conexões proxêmicas (Zonas de Hall)
+        for pe in proxemic_events:
+            p1_x = int(grid_cx + pe['pos1'][0] * ppm)
+            p1_y = int(grid_origin_y - pe['pos1'][2] * ppm)
+            p2_x = int(grid_cx + pe['pos2'][0] * ppm)
+            p2_y = int(grid_origin_y - pe['pos2'][2] * ppm)
+            line_color = (0, 0, 255) if pe['zone'] == 'intima' else (0, 255, 255)
+            cv2.line(target_img, (p1_x, p1_y), (p2_x, p2_y), line_color, 2)
         max_h, max_w = target_img.shape[:2]
 
         # Grade métrica concêntrica
@@ -587,18 +692,18 @@ class Dashboard3D:
 
     def _draw_hud_help(self, target_img: np.ndarray, view_mode: int, show_trajectories: bool, skeleton_mode: int):
         """Desenha um card de ajuda e atalhos semi-transparente (Glassmorphism HUD)."""
-        card_w, card_h = 360, 240
-        x1, y1 = 1210, 80
+        card_w, card_h = 390, 290
+        x1, y1 = 1180, 70
         x2, y2 = x1 + card_w, y1 + card_h
 
         # Overlay semi-transparente
         sub = target_img[y1:y2, x1:x2].copy()
         dark = np.zeros_like(sub)
-        cv2.addWeighted(dark, 0.82, sub, 0.18, 0, sub)
+        cv2.addWeighted(dark, 0.85, sub, 0.15, 0, sub)
         target_img[y1:y2, x1:x2] = sub
         cv2.rectangle(target_img, (x1, y1), (x2, y2), (0, 255, 180), 2)
 
-        cv2.putText(target_img, f"[ ATALHOS RAPIDOS - v{config.version} ]", (x1 + 20, y1 + 30), 
+        cv2.putText(target_img, f"[ ATALHOS RAPIDOS - v{config.version} ]", (x1 + 16, y1 + 28), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 220), 2)
         
         mode_names = {1: "Dashboard Triplo", 2: "Planta Baixa 3D", 3: "Câmera AR 1080p"}
@@ -606,14 +711,17 @@ class Dashboard3D:
 
         shortcuts = [
             f"[1, 2, 3] Modo de Tela: {mode_names.get(view_mode)}",
+            f"[TAB / Clique] Selecionar Alvo na Sala",
+            f"[P] Definir/Alternar Portador (Modo A)",
+            f"[F] Alternar Papel de Facilitador",
+            f"[N] Avançar Cena Teatral",
             f"[T] Trajetórias Neon: {'LIGADAS' if show_trajectories else 'DESLIGADAS'}",
             f"[S] Esqueleto Anatômico: {skel_names.get(skeleton_mode)}",
-            f"[M] Alternar este Menu de Ajuda",
-            f"[ESC / Q] Encerrar e Salvar Datasets",
-            f"Fase 4: 3D Depth Cluster ATIVO"
+            f"[M] Fechar este Menu de Ajuda",
+            f"[ESC / Q] Encerrar e Salvar Métricas"
         ]
 
-        y_text = y1 + 65
+        y_text = y1 + 56
         for s in shortcuts:
-            cv2.putText(target_img, s, (x1 + 20, y_text), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (230, 230, 230), 1)
-            y_text += 28
+            cv2.putText(target_img, s, (x1 + 16, y_text), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (230, 230, 230), 1)
+            y_text += 24

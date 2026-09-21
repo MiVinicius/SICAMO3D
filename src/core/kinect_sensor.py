@@ -71,17 +71,19 @@ class KinectSensor:
         self.room_calibration = calibration
 
 
-    def get_auto_calibration(self) -> Optional["RoomCalibration"]:
-        """Retorna calibração automática estimada a partir do plano do chão detectado."""
+    def get_auto_calibration(self, save_path: str = "config/calibration.json") -> Optional["RoomCalibration"]:
+        """Retorna calibração automática estimada a partir do plano do chão detectado e salva em arquivo."""
         if self.floor_clip_plane is not None:
             from src.core.room_calibration import RoomCalibration
-            return RoomCalibration.from_floor_plane(self.floor_clip_plane)
+            calib = RoomCalibration.from_floor_plane(self.floor_clip_plane, save_path=save_path)
+            return calib
         return None
 
     def get_3d_point_from_color(self, u: float, v: float, to_room: bool = False) -> Optional[Tuple[float, float, float]]:
         """
         Mapeia um pixel da imagem colorida (u: 0..1920, v: 0..1080) para a coordenada métrica 3D
         no espaço da câmera (ou da sala se to_room=True) em metros com alta performance.
+        Convenção CameraSpace dextra: +X para a direita, +Y para CIMA (altura), +Z para frente (profundidade).
         Retorna None se o ponto for inválido ou ocluso.
         """
         if self.last_depth_mm is None:
@@ -100,8 +102,9 @@ class KinectSensor:
             
             depth_m = float(np.median(valid_depths)) * 0.001
 
+            # Convenção CameraSpace: +X direita, +Y para CIMA (inverte dv-cy), +Z frente
             x_m = (du - self.cx) * depth_m / self.fx
-            y_m = (dv - self.cy) * depth_m / self.fy
+            y_m = -(dv - self.cy) * depth_m / self.fy
             z_m = depth_m
 
             pt_cam = (float(x_m), float(y_m), float(z_m))
@@ -111,6 +114,7 @@ class KinectSensor:
             return pt_cam
         except Exception:
             return None
+
 
     def unproject_keypoints_3d(self, keypoints_2d: np.ndarray, to_room: bool = False) -> np.ndarray:
         """

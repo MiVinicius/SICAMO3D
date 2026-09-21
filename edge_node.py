@@ -46,11 +46,11 @@ def main():
             person_detections_3d = []
             for p in pose_dets:
                 kpts_2d = p['keypoints']
-                kpts_3d = sensor.unproject_keypoints_3d(kpts_2d)
+                kpts_3d = sensor.unproject_keypoints_3d(kpts_2d, to_room=True)
 
                 valid_pts = []
-                for idx in [11, 12, 5, 6, 0]:
-                    if kpts_3d[idx, 3] > 0.25 and kpts_3d[idx, 2] > 0.4:
+                for idx in [5, 6, 11, 12]:  # Ombros e quadris (sem nariz)
+                    if kpts_3d[idx, 3] > 0.25 and kpts_3d[idx, 2] > 0.35:
                         valid_pts.append(kpts_3d[idx, :3])
 
                 if len(valid_pts) > 0:
@@ -58,6 +58,7 @@ def main():
                     person_detections_3d.append({
                         "pos_3d": [float(center_3d[0]), float(center_3d[1]), float(center_3d[2])],
                         "keypoints_3d": kpts_3d.tolist(),
+                        "keypoints_2d": kpts_2d,
                         "bbox": p['bbox']
                     })
 

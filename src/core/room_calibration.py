@@ -13,7 +13,8 @@ class RoomCalibration:
     def __init__(self, 
                  rotation_matrix: Optional[np.ndarray] = None,
                  translation_vector: Optional[np.ndarray] = None,
-                 floor_plane: Optional[Tuple[float, float, float, float]] = None):
+                 floor_plane: Optional[Tuple[float, float, float, float]] = None,
+                 calibration_file: Optional[str] = None):
         """
         Matriz de transformação: P_room = R * P_camera + T
         P_room: [X (largura), Y (altura a partir do chão), Z (profundidade da sala)]
@@ -22,45 +23,68 @@ class RoomCalibration:
         self.T: np.ndarray = translation_vector if translation_vector is not None else np.zeros((3,), dtype=np.float32)
         self.floor_plane = floor_plane
         self.is_calibrated = (rotation_matrix is not None and translation_vector is not None)
+        if calibration_file and os.path.exists(calibration_file):
+            self.load_from_file(calibration_file)
 
-    @classmethod
-    def from_floor_plane(cls, floor_clip_plane: Tuple[float, float, float, float], origin_offset: Optional[np.ndarray] = None) -> "RoomCalibration":
+    def from_floor_plane(self_or_cls, 
+                         floor_clip_plane: Tuple[float, float, float, float], 
+                         sensor_height_m: Optional[float] = None,
+                         origin_offset: Optional[np.ndarray] = None, 
+                         save_path: Optional[str] = None) -> "RoomCalibration":
         """
-        Constrói calibração a partir da equação do plano do chão do Kinect v2:
-        ax + by + cz + d = 0 (onde [a, b, c] é a normal apontando para cima no referencial da câmera).
-        No Kinect v2, +Y aponta para baixo, portanto a normal do chão tem Y negativo.
+        Constrói calibração a partir da equação do plano do chão:
+        ax + by + cz + d = 0 no espaço da câmera (onde +Y é para cima, +Z para frente).
+        Garante que o plano do chão fique exatamente em Y_room = 0 e que a altura cresça positivamente para cima.
         """
         a, b, c, d = floor_clip_plane
         norm = float(np.sqrt(a*a + b*b + c*c))
         if norm < 1e-6:
-            return cls()
+            if isinstance(self_or_cls, type):
+                return self_or_cls()
+            return self_or_cls
 
-        # Normal unitária do plano do chão no espaço da câmera
-        up_cam = np.array([a / norm, b / norm, c / norm], dtype=np.float32)
-        
-        # Queremos que o vetor 'up' no referencial da sala seja [0, 1, 0] (altura métrica)
-        # Eixo Y_room = up_cam
-        # Eixo Z_room = projeção de [0, 0, 1] ortogonal a Y_room
-        y_axis = up_cam
-        # Se up for quase paralelo ao eixo Z, usa X como referência
+        # Garante que a normal aponte para CIMA no espaço da câmera (b > 0)
+        sign = 1.0 if b >= 0 else -1.0
+        n_cam = np.array([sign * a / norm, sign * b / norm, sign * c / norm], dtype=np.float32)
+        d_norm = float(sign * d / norm)
+        if sensor_height_m is not None:
+            d_norm = float(sensor_height_m)
+
+        # No referencial da sala:
+        # Y_room aponta ao longo da normal do chão (para cima)
+        y_axis = n_cam
+
+        # Z_room = projeção de [0, 0, 1] ortogonal a Y_room (profundidade da sala)
         ref = np.array([0.0, 0.0, 1.0], dtype=np.float32) if abs(y_axis[2]) < 0.9 else np.array([1.0, 0.0, 0.0], dtype=np.float32)
         z_axis = ref - np.dot(ref, y_axis) * y_axis
         z_axis /= max(float(np.linalg.norm(z_axis)), 1e-6)
+
+        # X_room = Y_room x Z_room (sistema dextro: +X aponta para a direita)
         x_axis = np.cross(y_axis, z_axis)
         x_axis /= max(float(np.linalg.norm(x_axis)), 1e-6)
 
-        # Matriz de rotação da câmera para a sala: linhas são os novos eixos
+        # Matriz de rotação: linhas são os vetores unitários dos eixos da sala
         R = np.vstack([x_axis, y_axis, z_axis]).astype(np.float32)
 
-        # No plano ax + by + cz + d = 0, a distância da câmera ao chão ao longo da normal é d/norm.
-        # Translação para colocar o chão exatamente em Y_room = 0:
-        sensor_height_above_floor = float(d / norm)
-        T = np.array([0.0, sensor_height_above_floor, 0.0], dtype=np.float32)
+        # Para qualquer ponto P no chão: n_cam . P + d_norm = 0 => n_cam . P = -d_norm
+        # Com R, a coordenada Y_rot = n_cam . P = -d_norm.
+        # Para que Y_room = 0 no chão: T_y = +d_norm (altura física da câmera em relação ao chão).
+        T = np.array([0.0, d_norm, 0.0], dtype=np.float32)
         if origin_offset is not None:
             T += origin_offset
 
-        calib = cls(rotation_matrix=R, translation_vector=T, floor_plane=floor_clip_plane)
-        calib.is_calibrated = True
+        if isinstance(self_or_cls, type):
+            calib = self_or_cls(rotation_matrix=R, translation_vector=T, floor_plane=floor_clip_plane)
+        else:
+            self_or_cls.R = R
+            self_or_cls.T = T
+            self_or_cls.floor_plane = floor_clip_plane
+            self_or_cls.is_calibrated = True
+            calib = self_or_cls
+
+        if save_path:
+            calib.save_to_file(save_path)
+
         return calib
 
     def camera_to_room(self, points: Union[np.ndarray, Tuple[float, float, float], list]) -> np.ndarray:
@@ -96,6 +120,8 @@ class RoomCalibration:
 
         return pts
 
+    to_room_coords = camera_to_room
+
     def room_to_camera(self, points: Union[np.ndarray, Tuple[float, float, float]]) -> np.ndarray:
         """Transformação inversa: da sala para a câmera."""
         pts = np.asarray(points, dtype=np.float32)
@@ -128,15 +154,25 @@ class RoomCalibration:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
-    @classmethod
-    def load_from_file(cls, filepath: str) -> "RoomCalibration":
+    def load_from_file(self_or_cls, filepath: str) -> "RoomCalibration":
         if not os.path.exists(filepath):
-            return cls()
+            if isinstance(self_or_cls, type):
+                return self_or_cls()
+            return self_or_cls
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
         R = np.array(data["R"], dtype=np.float32)
         T = np.array(data["T"], dtype=np.float32)
         fp = tuple(data["floor_plane"]) if data.get("floor_plane") else None
-        calib = cls(rotation_matrix=R, translation_vector=T, floor_plane=fp)
-        calib.is_calibrated = data.get("is_calibrated", True)
-        return calib
+        is_calib = data.get("is_calibrated", True)
+
+        if isinstance(self_or_cls, type):
+            calib = self_or_cls(rotation_matrix=R, translation_vector=T, floor_plane=fp)
+            calib.is_calibrated = is_calib
+            return calib
+        else:
+            self_or_cls.R = R
+            self_or_cls.T = T
+            self_or_cls.floor_plane = fp
+            self_or_cls.is_calibrated = is_calib
+            return self_or_cls

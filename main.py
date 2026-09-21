@@ -1,12 +1,9 @@
-"""
-Ponto de entrada principal: Sistema de Inferência com Captura de Movimento de Objetos em Ambiente 3D (SICAMO3D v0.2.0)
-Nativo para Windows 11 com aceleração DirectML (DirectX 12).
-"""
 import time
 import cv2
 import ctypes
 import sys
 import os
+import numpy as np
 
 from src.core.config import config
 from src.core.pipeline import Pipeline
@@ -19,7 +16,6 @@ def main():
     print("=" * 80)
     print(f"SICAMO3D: SISTEMA DE INFERÊNCIA COM CAPTURA DE MOVIMENTO DE OBJETOS 3D (v{config.version})")
     print("=" * 80)
-
 
     # 1. Inicializa o Pipeline Central
     print("\n[1/3] Inicializando Pipeline Central (Kinect v2, DirectML, Tracker3D, HolderInference)...")
@@ -36,19 +32,86 @@ def main():
     cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(win_name, 1600, 900)
 
-    # Estados de visualização do dashboard
-    view_mode = 1           # 1: Triplo, 2: Mapa 3D, 3: AR Full
-    show_trajectories = True
-    skeleton_mode = 2
-    show_hud_help = False
+    def on_mouse(event, x, y, flags, param):
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+
+        active_tracks = pipeline.last_tracks
+        if not active_tracks:
+            return
+
+        vmode = pipeline.view_mode
+        selected = None
+
+        if vmode == 1:
+            # Modo Triplo:
+            # Câmera: x in [0, 960], y in [0, 540]
+            if 0 <= x < 960 and 0 <= y < 540:
+                sx = 1920.0 / 960.0
+                sy = 1080.0 / 540.0
+                cx_orig, cy_orig = x * sx, y * sy
+                for trk in active_tracks:
+                    if trk.last_bbox is not None:
+                        bx1, by1, bx2, by2 = trk.last_bbox
+                        if bx1 <= cx_orig <= bx2 and by1 <= cy_orig <= by2:
+                            selected = trk.track_id
+                            break
+            # Planta Baixa: x in [960, 1600], y in [0, 540]
+            elif 960 <= x < 1600 and 0 <= y < 540:
+                grid_cx = 960 + 320
+                grid_origin_y = 500
+                ppm = 70.0
+                floor_x = (x - grid_cx) / ppm
+                floor_z = (grid_origin_y - y) / ppm
+                best_dist = 0.80
+                for trk in active_tracks:
+                    px, _, pz = trk.position
+                    d = float(np.hypot(px - floor_x, pz - floor_z))
+                    if d < best_dist:
+                        best_dist = d
+                        selected = trk.track_id
+
+        elif vmode == 2:
+            # Planta Baixa Fullscreen (1600 x 900)
+            grid_cx = 800
+            grid_origin_y = 820
+            ppm = 110.0
+            floor_x = (x - grid_cx) / ppm
+            floor_z = (grid_origin_y - y) / ppm
+            best_dist = 0.90
+            for trk in active_tracks:
+                px, _, pz = trk.position
+                d = float(np.hypot(px - floor_x, pz - floor_z))
+                if d < best_dist:
+                    best_dist = d
+                    selected = trk.track_id
+
+        elif vmode == 3:
+            # Câmera Fullscreen (1600 x 900)
+            sx = 1920.0 / 1600.0
+            sy = 1080.0 / 900.0
+            cx_orig, cy_orig = x * sx, y * sy
+            for trk in active_tracks:
+                if trk.last_bbox is not None:
+                    bx1, by1, bx2, by2 = trk.last_bbox
+                    if bx1 <= cx_orig <= bx2 and by1 <= cy_orig <= by2:
+                        selected = trk.track_id
+                        break
+
+        if selected is not None:
+            pipeline.selected_track_id = selected
+            print(f"[OPERADOR] Alvo selecionado por clique: Track #{selected}")
+
+    cv2.setMouseCallback(win_name, on_mouse)
 
     print("\nSISTEMA PRONTO PARA OPERAÇÃO!")
     print("Atalhos do Operador:")
-    print("  [N] Próxima Cena Teatral")
-    print("  [P] Atribuir/Alternar Portador Manualmente (Modo A)")
-    print("  [F] Alternar Papel de Facilitador do 1º Alvo")
+    print("  [N] Avançar Cena Teatral")
+    print("  [TAB / Clique] Selecionar Participante na Sala")
+    print("  [P] Atribuir/Alternar Portador do Alvo Selecionado (Modo A)")
+    print("  [F] Alternar Papel de Facilitador do Alvo Selecionado")
     print("  [1/2/3] Modos de Tela (Triplo / Mapa 3D / Câmera AR)")
-    print("  [T] Alternar Trajetórias Neon | [S] Alternar Esqueletos | [M] Ajuda | [Q/ESC] Sair\n")
+    print("  [T] Trajetórias Neon | [S] Esqueleto | [M] Ajuda | [Q/ESC] Sair\n")
 
     try:
         while True:
@@ -72,32 +135,46 @@ def main():
                 next_scene = pipeline.advance_scene()
                 print(f"[OPERADOR] Avançou para a cena: {next_scene}")
 
-            elif key in [ord('p'), ord('P')]:
-                # Atribui portador ao primeiro participante ativo
+            elif key == 9:  # TAB: Alterna entre tracks ativos
                 if pipeline.last_tracks:
+                    track_ids = [t.track_id for t in pipeline.last_tracks]
+                    if pipeline.selected_track_id in track_ids:
+                        cur_idx = track_ids.index(pipeline.selected_track_id)
+                        pipeline.selected_track_id = track_ids[(cur_idx + 1) % len(track_ids)]
+                    else:
+                        pipeline.selected_track_id = track_ids[0]
+                    print(f"[OPERADOR] Alvo selecionado via TAB: Track #{pipeline.selected_track_id}")
+
+            elif key in [ord('p'), ord('P')]:
+                # Atribui portador ao alvo selecionado ou ao primeiro participante
+                target_id = pipeline.selected_track_id
+                if target_id is None and pipeline.last_tracks:
                     target_id = pipeline.last_tracks[0].track_id
+                if target_id is not None:
                     pipeline.set_manual_holder(target_id, duration_s=6.0)
                     print(f"[OPERADOR] Portador manual definido para o track #{target_id}")
 
             elif key in [ord('f'), ord('F')]:
-                if pipeline.last_tracks:
+                target_id = pipeline.selected_track_id
+                if target_id is None and pipeline.last_tracks:
                     target_id = pipeline.last_tracks[0].track_id
+                if target_id is not None:
                     pipeline.toggle_facilitator(target_id)
                     print(f"[OPERADOR] Papel do track #{target_id} alterado")
 
             # Controles de Visualização
             elif key == ord('1'):
-                pipeline.dashboard.view_mode = 1
+                pipeline.view_mode = 1
             elif key == ord('2'):
-                pipeline.dashboard.view_mode = 2
+                pipeline.view_mode = 2
             elif key == ord('3'):
-                pipeline.dashboard.view_mode = 3
+                pipeline.view_mode = 3
             elif key in [ord('t'), ord('T')]:
-                show_trajectories = not show_trajectories
+                pipeline.show_trajectories = not pipeline.show_trajectories
             elif key in [ord('s'), ord('S')]:
-                skeleton_mode = (skeleton_mode + 1) % 3
+                pipeline.skeleton_mode = (pipeline.skeleton_mode + 1) % 3
             elif key in [ord('m'), ord('M')]:
-                show_hud_help = not show_hud_help
+                pipeline.show_hud_help = not pipeline.show_hud_help
 
     except KeyboardInterrupt:
         print("\nInterrupção manual recebida.")
@@ -111,3 +188,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

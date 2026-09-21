@@ -51,6 +51,14 @@ class HolderInference:
         # Eventos gerados no frame atual (handoffs, transições)
         self.pending_events: List[Dict[str, Any]] = []
 
+    @property
+    def state(self) -> str:
+        return self.current_state.value if hasattr(self.current_state, "value") else str(self.current_state)
+
+    @property
+    def holder_id(self) -> Optional[int]:
+        return self.current_holder_id
+
     def set_manual_holder(self, track_id: Optional[int], duration_s: float = 5.0, timestamp_s: Optional[float] = None):
         """Permite ao operador (Modo A) forçar a atribuição de portador."""
         cur_t = timestamp_s if timestamp_s is not None else time.time()

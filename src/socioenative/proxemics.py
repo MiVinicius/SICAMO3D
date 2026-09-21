@@ -1,18 +1,22 @@
 """
 Módulo de cálculo de Proxêmica contínua entre indivíduos.
-Baseado na teoria de distâncias interpessoais de Edward T. Hall.
+Baseado na teoria de distâncias interpessoais de Edward T. Hall calibrada para crianças e adolescentes.
 """
 from typing import List, Dict, Tuple
 import numpy as np
+from src.core.config import config
 
 class ProxemicsAnalyzer:
     @staticmethod
     def get_zone(distance_m: float) -> str:
-        if distance_m < 0.45:
+        intimate = getattr(config.proxemics, "intimate_max_m", 0.35)
+        personal = getattr(config.proxemics, "personal_max_m", 1.00)
+        social = getattr(config.proxemics, "social_max_m", 2.50)
+        if distance_m < intimate:
             return "intima"
-        elif distance_m < 1.20:
+        elif distance_m < personal:
             return "pessoal"
-        elif distance_m < 3.60:
+        elif distance_m < social:
             return "social"
         else:
             return "publica"

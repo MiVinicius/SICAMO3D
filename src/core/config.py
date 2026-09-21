@@ -90,7 +90,7 @@ class NetworkConfig:
 
 @dataclass
 class SystemConfig:
-    version: str = "0.2.0"
+    version: str = "0.3.0"
     kinect: KinectConfig = field(default_factory=KinectConfig)
     ai: AIConfig = field(default_factory=AIConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)

@@ -1,13 +1,13 @@
-# SICAMO3D: Sistema de Inferência com Captura de Movimento de Objetos em Ambiente 3D (v0.2.0)
+# SICAMO3D: Sistema de Inferência com Captura de Movimento de Objetos em Ambiente 3D (v0.3.0)
 ### Rastreamento de Pessoas, Pelúcia Móvel e Análise de Cenas Teatrais em Tempo Real
 
-[![Versão](https://img.shields.io/badge/Versão-v0.2.0-brightgreen.svg)](https://github.com)
+[![Versão](https://img.shields.io/badge/Versão-v0.3.0-brightgreen.svg)](https://github.com)
 [![Plataforma](https://img.shields.io/badge/Plataforma-Windows%2011%20%7C%20DirectX%2012-blue)](https://microsoft.com)
 [![Hardware](https://img.shields.io/badge/GPU-AMD%20Radeon%20RX%206600-ED1C24)](https://amd.com)
 [![Sensor](https://img.shields.io/badge/Sensor-Microsoft%20Kinect%20v2-0078D7)](https://developer.microsoft.com/en-us/windows/kinect/)
 [![Taxa de Quadros](https://img.shields.io/badge/FPS-30%20(Hardware%20Locked)-brightgreen)](#otimizações-de-desempenho-e-latência)
 [![IA Backend](https://img.shields.io/badge/Backend-DirectML%20%7C%20ONNX%20Runtime-orange)](https://github.com/microsoft/DirectML)
-[![Testes](https://img.shields.io/badge/Testes-14%2F14%20Passando%20(pytest)-success)](tests/)
+[![Testes](https://img.shields.io/badge/Testes-18%2F18%20Passando%20(pytest)-success)](tests/)
 
 ---
 
@@ -15,17 +15,18 @@
 
 O **SICAMO3D** (**S**istema de **I**nferência com **CA**ptura de **M**ovimento de **O**bjetos em Ambiente **3D**) é uma plataforma de pesquisa científica e monitoramento socioenativo em tempo real, desenvolvida nativamente para **Windows 11** com aceleração por hardware via **DirectML (DirectX 12)** em GPUs **AMD Radeon RX 6600** (e nós secundários com GPUs NVIDIA/Intel).
 
-
 O sistema estrutura-se em torno do paradigma: **Pessoas + Artefato Móvel Único (Pelúcia do Espetáculo) + Cenas Teatrais**, com portador exclusivo por vez, detecção de passagens de posse, papéis e zonas no espaço físico:
 
-1. **Rastreamento Biomecânico e Referencial da Sala:** Rastreamento anatômico de 17 articulações COCO com alinhamento ao plano do chão ($Y = 0$), cálculo de velocidade horizontal ($X, Z_{sala}$) e filtro de Kalman com $dt$ dinâmico real.
+1. **Rastreamento Biomecânico e Referencial da Sala:** Rastreamento anatômico de 17 articulações COCO com alinhamento ao plano do chão ($Y = 0$), cálculo de velocidade horizontal no chão ($X, Z_{sala}$) e filtro de Kalman 3D com $dt$ dinâmico real.
 2. **Inferência de Portador Único (`holder_inference.py`):** Atribuição exclusiva e contínua do portador da pelúcia utilizando máquina de estados finita (`COM_PORTADOR`, `PASSAGEM`, `SEM_PORTADOR`, `INDETERMINADO`), histerese temporal e suporte geométrico ao **abraço** (distância ao tronco e correlação de co-movimento).
 3. **Detecção de Passagens de Posse (`handoff`):** Identificação de entregas doador $\rightarrow$ receptor com anotação da flag `id_ambiguous` para cruzamentos em que há incerteza ou nascimento recente de tracks.
-4. **Métricas Científicas de Circulação (`plush_metrics.py`):** Cálculo de tempo de posse normalizado pelo tempo de permanência no stand, Coeficiente de Gini de concentração da posse, matriz de transição de posse e atenção angular da plateia direcionada ao portador, tudo segmentado por cena teatral (`scene_id`).
-5. **Zonas Espaciais e Papéis (`zone_manager.py` e `config/zones.yaml`):** Delimitação métrica da sala (`stand_total`, `palco_facilitador`, `area_interacao_criancas`), separação entre passantes e participantes ativos, e sugestão automática do papel de facilitador para quem atua na estação fixa.
-6. **Interface do Operador (Modo A):** Controle em tempo real pelo operador para avanço de cenas (`N`), atribuição/override de portador (`P`) e demarcação de facilitador (`F`).
-7. **Gravação Científica Schema v3:** Registro frame-a-frame ininterrupto (mesmo com stand vazio) em `trajectories.csv`, `plush_state.csv`, `events.csv`, `session.yaml` e logs brutos em `raw_sensor.jsonl`.
-8. **Conformidade Ética e CEP:** Processamento e gravação estritamente numéricos com esqueletos anonimizados e observador ao vivo, sem retenção de vídeos de cor com rostos de crianças.
+4. **Supressão de Pose Duplicada na Pelúcia:** Filtro automático que descarta esqueletos humanos espúrios detectados sobre o próprio corpo da pelúcia (cruzamento de IoU $> 0.30$ com biometria corporal infantil mínima).
+5. **Métricas Científicas de Circulação (`plush_metrics.py`):** Cálculo de tempo de posse normalizado pelo tempo de permanência no stand, Coeficiente de Gini de concentração da posse (isolando facilitadores e passantes), matriz de transição de posse e atenção angular da plateia direcionada ao portador, tudo segmentado por cena teatral (`scene_id`).
+6. **Zonas Espaciais e Papéis (`zone_manager.py` e `config/zones.yaml`):** Delimitação métrica da sala (`stand_total`, `palco_facilitador`, `area_interacao_criancas`), separação entre passantes e participantes ativos, e sugestão automática do papel de facilitador para quem atua na estação fixa.
+7. **Interface do Operador Interativa (Modo A):** Seleção de participante por clique com o mouse no mapa da planta baixa ou na imagem da câmera, alternância com tecla `TAB`, avanço de cenas (`N`), marcação/override de portador (`P`) e demarcação de facilitador (`F`).
+8. **Detector de Pelúcia Desacoplado:** O sistema inicializa e opera no Modo A mesmo sem o arquivo de pesos da pelúcia (`yolo11s_plush.onnx`), dependendo apenas do detector de pose humana e anotações do operador.
+9. **Gravação Científica Schema v3 & Resumos JSON:** Registro frame-a-frame ininterrupto em `trajectories.csv`, `plush_state.csv`, `events.csv`, `session.yaml`, exportação consolidada em `metrics_summary.json` por cena e logs brutos em `raw_sensor.jsonl`.
+10. **Conformidade Ética e CEP:** Processamento e gravação estritamente numéricos com esqueletos anonimizados e observador ao vivo, sem retenção de vídeos de cor com rostos de crianças.
 
 ---
 
@@ -48,10 +49,16 @@ O sistema estrutura-se em torno do paradigma: **Pessoas + Artefato Móvel Único
              v                                               v
 +-------------------------+                     +-------------------------+
 |     YOLO11s-Pose        |                     |   YOLO11s-Plush         |
-|  17 Keypoints (DirectML)|                     |  Detector Ajustado      |
+|  17 Keypoints (DirectML)|                     |  Detector (Opcional)    |
 +------------+------------+                     +------------+------------+
              |                                               |
              +-----------------------+-----------------------+
+                                     |
+                                     v
+                      +-----------------------------+
+                      |  Filtro Anti-Fantasma       |
+                      | (Supressão de Pose Pelúcia) |
+                      +--------------+--------------+
                                      |
                                      v
                       +-----------------------------+
@@ -67,7 +74,8 @@ O sistema estrutura-se em torno do paradigma: **Pessoas + Artefato Móvel Único
 | - Posse Exclusiva       |                     | - Zonas (Stand/Palco)   |
 | - Máquina de Estados    |                     | - Cenas Teatrais        |
 | - Handoff & id_ambiguous|                     | - Presença & Facilitador|
-+------------+------------+                     +------------+------------+
+| - Override do Operador  |                     +-------------------------+
++------------+------------+                                  |
              |                                               |
              +-----------------------+-----------------------+
                                      |
@@ -75,7 +83,7 @@ O sistema estrutura-se em torno do paradigma: **Pessoas + Artefato Móvel Único
                       +-----------------------------+
                       |    PlushMetricsAnalyzer     |
                       | - Tempo de Posse Normalizado|
-                      | - Gini de Concentração      |
+                      | - Gini Plateia vs Facilitad.|
                       | - Grafo Doador -> Receptor  |
                       | - Atenção Angular da Plateia|
                       +--------------+--------------+
@@ -86,8 +94,9 @@ O sistema estrutura-se em torno do paradigma: **Pessoas + Artefato Móvel Único
 +-------------------------+                     +-------------------------+
 | ScientificLogger v3     |                     | Dashboard 3D (Triplo)   |
 | - trajectories.csv      |                     | - Câmera + Planta Baixa |
-| - plush_state.csv       |                     | - Painel de Métricas    |
-| - events.csv / session  |                     | - PiP do Portador       |
+| - plush_state.csv       |                     | - Zonas Poligonais      |
+| - events.csv / session  |                     | - Seleção Clique / TAB  |
+| - metrics_summary.json  |                     | - Painel de Métricas    |
 +-------------------------+                     +-------------------------+
 ```
 
@@ -105,6 +114,7 @@ teste/
 ├── main.py                        # Ponto de entrada do sistema com interface do operador
 ├── edge_node.py                   # Ponto de entrada do nó sensor secundário (Kinect #2)
 ├── config/
+│   ├── calibration.json           # Calibração do plano do chão salva automaticamente
 │   └── zones.yaml                 # Configuração poligonal de zonas da sala e cenas teatrais
 ├── recordings/                    # Datasets científicos salvos no Schema v3 (ignorados no Git)
 │   └── session_YYYYMMDD_HHMMSS/
@@ -112,6 +122,7 @@ teste/
 │       ├── trajectories.csv       # Trajetórias contínuas, roles, presence e ground speed
 │       ├── plush_state.csv        # Estado da pelúcia (portador exclusivo, coordenadas)
 │       ├── events.csv             # Handoffs, mudanças de cena e marcações do operador
+│       ├── metrics_summary.json   # Resumo estatístico consolidado por cena
 │       └── raw_sensor.jsonl       # Log bruto anonimizado para replay e reprocessamento
 ├── src/
 │   ├── ai/
@@ -129,8 +140,8 @@ teste/
 │   ├── socioenative/
 │   │   ├── holder_inference.py    # Atribuição de portador, histerese e detecção de handoff
 │   │   ├── plush_metrics.py       # Cálculo de Gini, matriz de transição e atenção angular
-│   │   ├── posture_classifier.py  # Classificação postural (em pé, sentado, agachado)
-│   │   ├── proxemics.py           # Zonas de proxêmica de Hall calibradas para crianças
+│   │   ├── posture_classifier.py  # Classificação postural adaptada a crianças (relação tronco/perna)
+│   │   ├── proxemics.py           # Zonas de proxêmica de Hall compactas (infantil)
 │   │   └── scientific_logger.py   # Gravador científico com Schema v3 contínuo
 │   ├── tracking/
 │   │   ├── kalman_filter_3d.py    # Filtro de Kalman 3D com dt dinâmico e velocidade no chão
@@ -142,17 +153,19 @@ teste/
 │   ├── test_holder_inference.py   # Testes sintéticos de posse, abraço e handoffs
 │   ├── test_plush_metrics.py      # Testes de Gini, tempo normalizado e Schema v3
 │   ├── test_tracker_synthetic.py  # Testes de Kalman, ground speed e descarte de fantasmas
+│   ├── test_room_calibration.py   # Testes de geometria do chão (Y=0, normal up, persistência)
+│   ├── test_pipeline_smoke.py     # Teste de fumaça fim-a-fim com sensor mock (sem hardware)
 │   ├── test_tools_evaluation.py   # Testes de ponta a ponta para evaluate.py e replay.py
 │   ├── test_kinect_capture.py     # Teste com hardware físico conectado
 │   └── test_system_pipeline.py    # Teste de 5 frames com hardware físico
 ├── tools/
-│   ├── evaluate.py                # Avaliação científica com precisão, recall e F1 contra gabarito
+│   ├── evaluate.py                # Avaliação científica com casamento 1:1 e Gini isolado
 │   ├── replay.py                  # Player visual de sessões gravadas (sem Kinect)
 │   ├── benchmark_directml.py      # Perfilamento de latência na GPU
 │   └── download_weights.py        # Download e exportação de modelos ONNX
 └── weights/                       # Modelos neurais em formato ONNX
     ├── yolo11s-pose.onnx          # Pose estimation (17 articulações COCO)
-    └── yolo11s_plush.onnx         # Detector da pelúcia (classe única)
+    └── yolo11s_plush.onnx         # Detector da pelúcia (opcional no Modo A)
 ```
 
 ---
@@ -167,10 +180,11 @@ pip install -r requirements.txt
 ```
 
 ### 2. Execução dos Testes Automatizados (Sem Hardware)
-Valide a integridade de todos os algoritmos matemáticos e da máquina de estados sem precisar do Kinect conectado:
+Valide a integridade de todos os algoritmos matemáticos, geometria e da máquina de estados sem precisar do Kinect conectado:
 ```powershell
 python -m pytest -v
 ```
+*(18 testes unitários e de integração executados com 100% de sucesso).*
 
 ### 3. Operação em Tempo Real (Com Kinect v2)
 Inicie o sistema no PC principal conectado ao sensor Kinect v2:
@@ -179,14 +193,16 @@ python main.py
 ```
 
 #### Controles Interativos do Operador (Modo A):
-- **`N`**: Avança para a próxima cena teatral (`Cena 1` $\rightarrow$ `Cena 2` $\rightarrow$ `Cena 3`).
-- **`P`**: Atribui manualmente a posse da pelúcia ao participante em foco.
-- **`F`**: Alterna o papel de facilitador de um participante selecionado.
+- **Clique no Mapa ou Câmera**: Seleciona diretamente o participante na sala (halo dourado `[SELECIONADO]`).
+- **`TAB`**: Alterna sequencialmente o foco entre os participantes ativos na sala.
+- **`P`**: Atribui manualmente a posse da pelúcia ao participante selecionado (com duração de 6s ou até próxima entrega).
+- **`F`**: Alterna o papel de facilitador do participante selecionado (isolando-o do Gini da plateia).
+- **`N`**: Avança para a próxima cena teatral (`Cena 1` $\rightarrow$ `Cena 2` $\rightarrow$ `Cena 3`) e salva resumo parcial.
 - **`1` / `2` / `3`**: Alterna os modos de tela (Dashboard Triplo / Planta Baixa 3D Full / Câmera AR).
 - **`T`**: Ativa/desativa as trajetórias contínuas em neon.
 - **`S`**: Alterna o modo de esqueleto (Oculto / Mãos / Completo).
 - **`M`**: Abre/fecha o menu HUD de ajuda rápida.
-- **`Q` ou `ESC`**: Encerra o sistema gravando com segurança os arquivos no disco.
+- **`Q` ou `ESC`**: Encerra o sistema gravando com segurança os datasets e `metrics_summary.json`.
 
 ### 4. Reprodução de Sessões Gravadas (Replay Offline)
 Para reproduzir visualmente uma sessão gravada e inspecionar a dinâmica da pelúcia:
@@ -198,6 +214,10 @@ python tools/replay.py recordings/session_20260919_213000/
 Para comparar os eventos de passagem detectados contra anotações manuais de um observador independente:
 ```powershell
 python tools/evaluate.py recordings/session_20260919_213000/ --gt caminho/gabarito_events.csv
+```
+Com suporte opcional a gabarito contínuo frame-a-frame:
+```powershell
+python tools/evaluate.py recordings/session_20260919_213000/ --gt caminho/gabarito_events.csv --gt-frames caminho/gabarito_frames.csv
 ```
 
 ---
