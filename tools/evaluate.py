@@ -2,17 +2,90 @@
 Módulo de Avaliação Científica e Métricas de Validação (tools/evaluate.py).
 Calcula:
 - Acurácia de portador frame-a-frame (com tolerância de transição de +- 1.0s);
-- Precisão e Recall de eventos de passagem (handoffs);
+- Casamento estrito 1:1 de eventos de passagem (handoffs) com validação de doador e receptor;
+- Precisão, Recall e F1 de handoffs;
 - Taxa de passagens falsas por minuto (FP/min);
-- Estatísticas de concentração de posse (Gini) e circulação entre os participantes.
+- Estatísticas de concentração de posse (Gini) e circulação entre os participantes;
+- Métrica de trocas de identidade de rastreamento (ID switches por minuto) contra identidades reais.
 """
 import os
 import argparse
+from typing import Dict, Any, List, Optional, Set, Tuple
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List
 
-def evaluate_session(session_dir: str, ground_truth_events_csv: str = None, ground_truth_frames_csv: str = None) -> Dict[str, Any]:
+def calculate_id_switches(
+    df_traj: pd.DataFrame, 
+    df_gt_id: pd.DataFrame, 
+    session_duration_min: float
+) -> Dict[str, Any]:
+    """
+    Calcula a contagem de ID switches (trocas de identidade) por pessoa real e a taxa por minuto.
+    df_gt_id pode conter:
+      - ['t_capture_ms', 'real_person_id', 'track_id'] (mapeamento explícito)
+      ou
+      - ['t_capture_ms', 'real_person_id', 'pos_x', 'pos_z'] (mapeamento por proximidade espacial)
+    """
+    if df_gt_id.empty or "real_person_id" not in df_gt_id.columns:
+        return {"total_id_switches": 0, "id_switches_per_min": 0.0, "switches_by_person": {}}
+
+    merged = df_gt_id.copy()
+
+    # Se o gabarito contém posições em vez de track_id direto, mapeia por proximidade espacial
+    if "track_id" not in merged.columns and not df_traj.empty and "pos_x" in merged.columns and "pos_x" in df_traj.columns:
+        assigned_tracks = []
+        for _, gt_row in merged.iterrows():
+            t_ms = gt_row["t_capture_ms"]
+            gx, gz = float(gt_row["pos_x"]), float(gt_row["pos_z"])
+            traj_frame = df_traj[
+                (df_traj["t_capture_ms"] >= t_ms - 50) & 
+                (df_traj["t_capture_ms"] <= t_ms + 50) & 
+                (df_traj["track_id"] > 0)
+            ]
+            best_tid = None
+            best_d = 0.80 # raio máximo de 80cm para associação espacial
+            for _, trk_row in traj_frame.iterrows():
+                tx, tz = float(trk_row["pos_x"]), float(trk_row["pos_z"])
+                d = float(np.hypot(tx - gx, tz - gz))
+                if d < best_d:
+                    best_d = d
+                    best_tid = int(trk_row["track_id"])
+            assigned_tracks.append(best_tid)
+        merged["track_id"] = assigned_tracks
+
+    total_switches = 0
+    switches_by_person = {}
+
+    for person_id, group in merged.groupby("real_person_id"):
+        sorted_grp = group.sort_values("t_capture_ms") if "t_capture_ms" in group.columns else group
+        person_switches = 0
+        last_track_id = None
+
+        for _, r in sorted_grp.iterrows():
+            tid = r.get("track_id")
+            if pd.notna(tid) and int(tid) > 0:
+                tid_int = int(tid)
+                if last_track_id is not None and tid_int != last_track_id:
+                    person_switches += 1
+                last_track_id = tid_int
+
+        switches_by_person[str(person_id)] = person_switches
+        total_switches += person_switches
+
+    rate_per_min = total_switches / session_duration_min if session_duration_min > 0 else 0.0
+
+    return {
+        "total_id_switches": total_switches,
+        "id_switches_per_min": round(rate_per_min, 2),
+        "switches_by_person": switches_by_person
+    }
+
+def evaluate_session(
+    session_dir: str, 
+    ground_truth_events_csv: Optional[str] = None, 
+    ground_truth_frames_csv: Optional[str] = None,
+    ground_truth_identities_csv: Optional[str] = None
+) -> Dict[str, Any]:
     plush_path = os.path.join(session_dir, "plush_state.csv")
     events_path = os.path.join(session_dir, "events.csv")
     traj_path = os.path.join(session_dir, "trajectories.csv")
@@ -53,7 +126,7 @@ def evaluate_session(session_dir: str, ground_truth_events_csv: str = None, grou
     gini_possession = calc_gini(list(participant_holder_counts.values()))
     
     # 2. Eventos de Handoff detectados
-    handoffs_detected = df_events[df_events["event_type"] == "handoff"].copy() if not df_events.empty else pd.DataFrame()
+    handoffs_detected = df_events[df_events["event_type"] == "handoff"].copy() if not df_events.empty and "event_type" in df_events.columns else pd.DataFrame()
     n_handoffs = len(handoffs_detected)
     handoffs_per_min = n_handoffs / session_duration_min
 
@@ -72,7 +145,6 @@ def evaluate_session(session_dir: str, ground_truth_events_csv: str = None, grou
     print(f"Passagens com flag de ambiguidade (id_ambiguous): {ambiguous_handoffs}")
     print("=" * 60)
 
-    # 3. Comparação com Gabarito (Ground Truth) se fornecido
     results = {
         "session_duration_s": round(session_duration_s, 2),
         "distinct_holders": distinct_holders,
@@ -82,38 +154,40 @@ def evaluate_session(session_dir: str, ground_truth_events_csv: str = None, grou
         "ambiguous_handoffs": ambiguous_handoffs
     }
 
+    # 3. Casamento 1:1 Estrito de Handoffs com Verificação de Doador e Receptor (Issue M4-03)
     if ground_truth_events_csv and os.path.exists(ground_truth_events_csv):
         df_gt = pd.read_csv(ground_truth_events_csv)
-        gt_handoffs = df_gt[df_gt["event_type"] == "handoff"]
+        gt_handoffs = df_gt[df_gt["event_type"] == "handoff"].copy()
         n_gt = len(gt_handoffs)
-        
-        # Casamento 1:1 de handoffs com janela de tolerância de +- 1.0s (1000 ms)
-        matched_gt = 0
-        matched_det = set()
 
-        for _, gt_row in gt_handoffs.iterrows():
+        candidate_pairs: List[Tuple[float, Any, Any]] = [] # (dt, gt_idx, det_idx)
+        for gt_idx, gt_row in gt_handoffs.iterrows():
             gt_t = gt_row["t_capture_ms"]
-            # Exclui detecções já consumidas (casamento 1:1)
-            candidates = handoffs_detected.loc[~handoffs_detected.index.isin(matched_det)]
-            match = candidates[
-                (candidates["t_capture_ms"] >= gt_t - 1000) &
-                (candidates["t_capture_ms"] <= gt_t + 1000)
-            ]
-            if not match.empty:
-                # Se GT especifica IDs, prioriza casamento com IDs coincidentes
-                best_idx = None
-                if "donor_id" in gt_row and pd.notna(gt_row["donor_id"]) and "donor_id" in match.columns:
-                    id_match = match[(match["donor_id"] == gt_row["donor_id"]) & (match["receiver_id"] == gt_row["receiver_id"])]
-                    if not id_match.empty:
-                        best_idx = (id_match["t_capture_ms"] - gt_t).abs().idxmin()
+            gt_donor = gt_row.get("donor_id")
+            gt_recv = gt_row.get("receiver_id")
+            has_gt_ids = pd.notna(gt_donor) and pd.notna(gt_recv)
 
-                if best_idx is None:
-                    best_idx = (match["t_capture_ms"] - gt_t).abs().idxmin()
+            for det_idx, det_row in handoffs_detected.iterrows():
+                det_t = det_row["t_capture_ms"]
+                dt = abs(det_t - gt_t)
+                if dt <= 1000: # Janela de tolerância temporal de +- 1.0s
+                    # Se o gabarito especifica donor e receiver, ambos devem coincidir
+                    if has_gt_ids and "donor_id" in det_row and pd.notna(det_row["donor_id"]):
+                        if int(det_row["donor_id"]) != int(gt_donor) or int(det_row["receiver_id"]) != int(gt_recv):
+                            continue
+                    candidate_pairs.append((dt, gt_idx, det_idx))
 
-                matched_gt += 1
-                matched_det.add(best_idx)
+        # Ordena candidatos pela menor discrepância temporal
+        candidate_pairs.sort(key=lambda x: x[0])
 
-        tp = matched_gt
+        matched_gt: Set[Any] = set()
+        matched_det: Set[Any] = set()
+        for dt, gt_idx, det_idx in candidate_pairs:
+            if gt_idx not in matched_gt and det_idx not in matched_det:
+                matched_gt.add(gt_idx)
+                matched_det.add(det_idx)
+
+        tp = len(matched_gt)
         fp = len(handoffs_detected) - len(matched_det)
         fn = n_gt - tp
 
@@ -122,7 +196,7 @@ def evaluate_session(session_dir: str, ground_truth_events_csv: str = None, grou
         f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
         fp_per_min = fp / session_duration_min
 
-        print("\nCOMPARAÇÃO COM GABARITO (GROUND TRUTH EVENTOS):")
+        print("\nCOMPARAÇÃO COM GABARITO (GROUND TRUTH EVENTOS - CASAMENTO 1:1):")
         print(f"  > Handoffs Gabarito: {n_gt}")
         print(f"  > Verdadeiros Positivos (TP): {tp}")
         print(f"  > Falsos Positivos (FP): {fp} ({fp_per_min:.2f} FP/min)")
@@ -140,7 +214,7 @@ def evaluate_session(session_dir: str, ground_truth_events_csv: str = None, grou
             "fp_per_min": round(fp_per_min, 2)
         })
 
-    # 4. Avaliação frame-a-frame se fornecido gabarito contínuo
+    # 4. Avaliação frame-a-frame de portador se fornecido gabarito contínuo
     if ground_truth_frames_csv and os.path.exists(ground_truth_frames_csv):
         df_gt_f = pd.read_csv(ground_truth_frames_csv)
         merged = pd.merge(df_plush, df_gt_f, on="t_capture_ms", suffixes=("_det", "_gt"))
@@ -152,6 +226,16 @@ def evaluate_session(session_dir: str, ground_truth_events_csv: str = None, grou
             print(f"  > Acurácia de portador: {acc * 100.0:.2f}% ({correct}/{total_f} frames)")
             results["frame_holder_accuracy"] = round(acc, 4)
 
+    # 5. Avaliação de Trocas de Identidade / ID Switches (Issue M4-02)
+    if ground_truth_identities_csv and os.path.exists(ground_truth_identities_csv):
+        df_gt_id = pd.read_csv(ground_truth_identities_csv)
+        id_sw_results = calculate_id_switches(df_traj, df_gt_id, session_duration_min)
+        print("\nAVALIAÇÃO DE CONTINUIDADE DE RASTREAMENTO (ID SWITCHES):")
+        print(f"  > Total de trocas de identidade (ID switches): {id_sw_results['total_id_switches']}")
+        print(f"  > Taxa de trocas: {id_sw_results['id_switches_per_min']:.2f} switches/min")
+        print(f"  > Detalhamento por pessoa: {id_sw_results['switches_by_person']}")
+        results.update(id_sw_results)
+
     return results
 
 if __name__ == "__main__":
@@ -159,5 +243,11 @@ if __name__ == "__main__":
     parser.add_argument("session_dir", type=str, help="Pasta da sessão a avaliar")
     parser.add_argument("--gt", type=str, default=None, help="Caminho do CSV de eventos de gabarito")
     parser.add_argument("--gt-frames", type=str, default=None, help="Caminho do CSV frame-a-frame de gabarito")
+    parser.add_argument("--gt-identities", type=str, default=None, help="Caminho do CSV de identidades reais para cálculo de ID switches")
     args = parser.parse_args()
-    evaluate_session(args.session_dir, ground_truth_events_csv=args.gt, ground_truth_frames_csv=args.gt_frames)
+    evaluate_session(
+        args.session_dir, 
+        ground_truth_events_csv=args.gt, 
+        ground_truth_frames_csv=args.gt_frames,
+        ground_truth_identities_csv=args.gt_identities
+    )

@@ -1,7 +1,8 @@
 """
-Módulo da Fase 2: Hand-Centric High-Resolution ROI.
-Executa recortes adaptativos métricos em alta definição (1080p) ao redor de cada mão
-para detectar brinquedos pequenos com nitidez 10x superior e analisar o estado da pegada.
+[EXPERIMENTAL / ARQUIVADO] Módulo de Hand-Centric High-Resolution ROI.
+Substituído pela abordagem unificada de detecção mono-classe global (YOLO11s-Plush)
+e inferência multivariada de portador (HolderInference).
+Mantido nesta pasta experimental apenas para referência histórica de recortes em alta definição.
 """
 from typing import List, Dict, Tuple, Optional
 import numpy as np
@@ -9,11 +10,6 @@ import cv2
 
 class HandROIDetector:
     def __init__(self, physical_roi_size_m: float = 0.55):
-        """
-        physical_roi_size_m: Tamanho físico do recorte ao redor da mão no espaço real (55 cm).
-        Garante que, mesmo segurando o brinquedo na ponta dos dedos a 1,30m ou mais,
-        o objeto permaneça 100% dentro do campo de visão do zoom.
-        """
         self.roi_size_m = physical_roi_size_m
         self.fy_1080p = 1060.0
         self.hand_turn = 0
@@ -28,21 +24,15 @@ class HandROIDetector:
                 toy_classes: Dict[int, str],
                 conf_thresh: float = 0.08,
                 current_toys: Optional[List[Dict]] = None) -> Tuple[List[Dict], List[Dict]]:
-        """
-        Processa com alta eficiência: prioriza a mão em interação com o brinquedo e avalia
-        em alta definição (1080p) para reconhecimento estável e contínuo.
-        """
         img_h, img_w = color_1080p.shape[:2]
         active_track_ids = {trk.track_id for trk in tracks}
 
-        # Limpa cache de tracks que não estão mais presentes
         self.cached_toys = {k: v for k, v in self.cached_toys.items() if k[0] in active_track_ids}
         self.cached_crops = {k: v for k, v in self.cached_crops.items() if k[0] in active_track_ids}
 
-        # Coleta todas as mãos válidas e visíveis
         candidate_hands = []
         for trk in tracks:
-            left_2d, right_2d = trk.hands_2d
+            left_2d, right_2d = getattr(trk, 'hands_2d', (None, None))
             left_3d, right_3d = trk.hands_3d
 
             for hand_name, h2d, h3d in [("Mão Dir", right_2d, right_3d), ("Mão Esq", left_2d, left_3d)]:
@@ -53,7 +43,6 @@ class HandROIDetector:
             all_toys = [t for sub in self.cached_toys.values() for t in sub]
             return all_toys, list(self.cached_crops.values())
 
-        # Prioriza inferência na mão mais próxima de um brinquedo conhecido
         best_candidate = None
         min_toy_dist = 999.0
         if current_toys:
@@ -75,8 +64,7 @@ class HandROIDetector:
 
         key = (trk.track_id, hand_name)
 
-        hx, hy, _ = h2d
-        # Projeta o centro na direção da palma / dedos usando o vetor cotovelo -> pulso
+        hx, hy = h2d[:2]
         elbow_idx = 7 if "Esq" in hand_name else 8
         kpts_2d = trk.last_keypoints_2d
         if kpts_2d is not None and kpts_2d[elbow_idx, 2] > 0.12:
@@ -86,8 +74,6 @@ class HandROIDetector:
             hy = hy + 0.25 * vy
 
         depth_m = h3d[2] if (h3d is not None and h3d[2] > 0.4) else 1.3
-
-        # Tamanho adaptativo em pixels para cobrir exatamente 55cm no espaço real
         box_pixels = int(np.clip((self.roi_size_m * self.fy_1080p) / max(0.5, depth_m), 200, 520))
         half_box = box_pixels // 2
 
@@ -101,8 +87,6 @@ class HandROIDetector:
 
         if crop_w >= 80 and crop_h >= 80:
             raw_crop = color_1080p[y1:y2, x1:x2]
-
-            # Inferência única no recorte da mão selecionada
             c_blob, c_ratio, c_pad = object_engine.preprocess(raw_crop)
             c_raw = object_engine.run_raw(c_blob)
             c_dets = object_engine.postprocess_objects(
@@ -148,7 +132,6 @@ class HandROIDetector:
             cv2.putText(crop_annotated, f"ID#{trk.track_id} {hand_name}", (5, 172), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 150), 1)
 
-            # Atualiza caches da mão inspecionada
             self.cached_crops[key] = {
                 "track_id": trk.track_id,
                 "hand_name": hand_name,

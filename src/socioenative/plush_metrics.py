@@ -40,16 +40,19 @@ class PlushMetricsAnalyzer:
 
     def update(self, 
                tracks: List, 
-               holder_result: Optional[Dict[str, Any]] = None, 
+               holder_info: Optional[Dict[str, Any]] = None, 
                scene_id: Optional[str] = None, 
                timestamp_s: Optional[float] = None,
+               holder_result: Optional[Dict[str, Any]] = None,
                **kwargs):
         """
         Atualiza acumuladores de tempo e métricas para o frame atual.
-        Aceita tanto holder_result quanto holder_info como parâmetro.
+        Aceita holder_info (padrão do pipeline) ou holder_result (alias retrocompatível).
         """
-        if holder_result is None:
-            holder_result = kwargs.get("holder_info", {})
+        if holder_info is None:
+            holder_info = holder_result if holder_result is not None else kwargs.get("holder_info", {})
+        if holder_info is None:
+            holder_info = {}
 
         if scene_id is not None:
             self.active_scene_id = scene_id
@@ -74,13 +77,13 @@ class PlushMetricsAnalyzer:
             sc_data["presence_states"][t_id] = getattr(trk, "presence_state", "participante_ativo")
 
         # 2. Acumula tempo de posse do portador atual
-        holder_id = holder_result.get("holder_id")
-        state = holder_result.get("state")
+        holder_id = holder_info.get("holder_id")
+        state = holder_info.get("state")
         if holder_id is not None and state == "COM_PORTADOR":
             sc_data["possession_times"][holder_id] = sc_data["possession_times"].get(holder_id, 0.0) + dt
 
         # 3. Registra eventos de handoff pendentes
-        for ev in holder_result.get("events", []):
+        for ev in holder_info.get("events", []):
             if ev.get("type") == "handoff":
                 ev_copy = dict(ev)
                 ev_copy["scene_id"] = self.active_scene_id

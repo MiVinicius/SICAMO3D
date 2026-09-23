@@ -18,6 +18,11 @@ class RoomCalibration:
         """
         Matriz de transformação: P_room = R * P_camera + T
         P_room: [X (largura), Y (altura a partir do chão), Z (profundidade da sala)]
+
+        Convenção Espacial Dextra (Right-Handed System):
+        - +X_room: Aponta para a DIREITA (largura da sala vista a partir da câmera).
+        - +Y_room: Aponta para CIMA ao longo da normal do chão (chão em Y=0, câmera em Y=h).
+        - +Z_room: Aponta para a FRENTE / FUNDO da sala (profundidade métrica).
         """
         self.R: np.ndarray = rotation_matrix if rotation_matrix is not None else np.eye(3, dtype=np.float32)
         self.T: np.ndarray = translation_vector if translation_vector is not None else np.zeros((3,), dtype=np.float32)

@@ -53,6 +53,7 @@ class Track3D:
         self.track_state: str = "medido" # 'medido' no frame da observação, 'predito' se extrapolado
         self.held_toy: Optional[str] = None
         self.dwell_time_s: float = 0.0
+        self.stationary_time_s: float = 0.0  # Tempo acumulado com velocidade baixa (< 0.40 m/s)
 
     def predict(self, dt: Optional[float] = None) -> Tuple[float, float, float]:
         pos = self.kf.predict(dt=dt)
@@ -71,6 +72,7 @@ class Track3D:
         self.time_since_update = 0
         self.track_state = "medido"
         cur_time = timestamp_s if timestamp_s is not None else time.time()
+        frame_dt = max(0.001, min(0.20, cur_time - self.last_seen_time)) if self.last_seen_time > 0 else (1.0 / 30.0)
         self.last_seen_time = cur_time
         self.dwell_time_s = max(0.0, self.last_seen_time - self.first_seen_time)
 
@@ -78,13 +80,23 @@ class Track3D:
         if self.hits >= 3:
             self.is_confirmed = True
 
-        # Regra de classificação de presença baseada em tempo de permanência (dwell time)
-        if self.dwell_time_s < 2.5:
-            self.presence_state = "passante"
-        elif self.dwell_time_s < 10.0:
+        # Issue M1-02: Distinção de trânsito vs permanência intencional pela velocidade
+        # Transeuntes cruzando a área em passos normais (ground_speed >= 0.50 m/s) permanecem como 'passante'.
+        # Espectadores que param diante da cena (ground_speed < 0.40 m/s) acumulam stationary_time_s.
+        spd = self.ground_speed
+        if spd < 0.40:
+            self.stationary_time_s += frame_dt
+        elif spd >= 0.50:
+            self.stationary_time_s = max(0.0, self.stationary_time_s - frame_dt * 1.5)
+
+        if getattr(self, "held_toy", None) is not None or getattr(self, "role", "participante") == "facilitador":
+            self.presence_state = "participante_ativo"
+        elif self.stationary_time_s >= 10.0:
+            self.presence_state = "participante_ativo"
+        elif self.stationary_time_s >= 2.5:
             self.presence_state = "plateia"
         else:
-            self.presence_state = "participante_ativo"
+            self.presence_state = "passante"
         
         cur_pos = self.kf.position
         # Deadzone de deslocamento (5 cm): elimina trepidação e o nó de linhas quando a pessoa está parada
@@ -158,6 +170,30 @@ class Track3D:
     @property
     def ground_speed(self) -> float:
         return self.kf.ground_speed
+
+    @property
+    def heading_deg(self) -> Optional[float]:
+        """
+        Estima a orientação corporal no plano X-Z da sala em graus [-180, 180].
+        0° = voltado para o fundo (+Z)
+        +90° = direita (+X)
+        -90° = esquerda (-X)
+        180°/-180° = frente/câmera (-Z)
+        """
+        if self.last_keypoints_3d is not None:
+            k3d = self.last_keypoints_3d
+            if k3d.shape[0] > 6 and k3d[5, 3] > 0.20 and k3d[6, 3] > 0.20:
+                sx_l, sz_l = k3d[5, 0], k3d[5, 2]
+                sx_r, sz_r = k3d[6, 0], k3d[6, 2]
+                if not (np.isnan(sx_l) or np.isnan(sx_r) or np.isnan(sz_l) or np.isnan(sz_r)):
+                    v_shoulders = np.array([sx_l - sx_r, sz_l - sz_r])
+                    v_facing = np.array([v_shoulders[1], -v_shoulders[0]])
+                    return float(np.degrees(np.arctan2(v_facing[0], v_facing[1])))
+
+        vx, _, vz = self.velocity
+        if np.hypot(vx, vz) > 0.20:
+            return float(np.degrees(np.arctan2(vx, vz)))
+        return None
 
     @property
     def hands_3d(self) -> Tuple[Optional[Tuple[float, float, float]], Optional[Tuple[float, float, float]]]:

@@ -9,6 +9,7 @@ import time
 from enum import Enum
 from typing import List, Dict, Tuple, Optional, Any
 import numpy as np
+from src.socioenative.proxemics import ProxemicsAnalyzer
 
 class HolderState(str, Enum):
     COM_PORTADOR = "COM_PORTADOR"
@@ -18,16 +19,18 @@ class HolderState(str, Enum):
 
 class HolderInference:
     def __init__(self, 
-                 wrist_thresh_m: float = 0.45,
-                 torso_thresh_m: float = 0.55,
+                 wrist_thresh_m: float = 0.35,
+                 torso_thresh_m: float = 0.45,
                  handoff_window_s: float = 2.0,
                  min_margin: float = 0.12,
-                 timeout_s: float = 1.5):
+                 timeout_s: float = 1.5,
+                 weights: Tuple[float, float, float, float] = (0.35, 0.35, 0.20, 0.10)):
         self.wrist_thresh_m = wrist_thresh_m
         self.torso_thresh_m = torso_thresh_m
         self.handoff_window_s = handoff_window_s
         self.min_margin = min_margin
         self.timeout_s = timeout_s
+        self.weights = weights
 
         # Estado atual da máquina de estados
         self.current_state: HolderState = HolderState.INDETERMINADO
@@ -150,8 +153,8 @@ class HolderInference:
             torso_dist = float(np.linalg.norm(trk_pos - p_pos))
 
             # Features normalizadas
-            f_wrist = float(np.exp(-min_wrist_dist / 0.35)) if min_wrist_dist < 2.0 else 0.0
-            f_torso = float(np.exp(-torso_dist / 0.45)) if torso_dist < 2.5 else 0.0
+            f_wrist = float(np.exp(-min_wrist_dist / self.wrist_thresh_m)) if min_wrist_dist < 2.0 else 0.0
+            f_torso = float(np.exp(-torso_dist / self.torso_thresh_m)) if torso_dist < 2.5 else 0.0
 
             # Co-movimento: correlação direcional e de magnitude de velocidade nos últimos quadros
             f_comove = 0.0
@@ -173,9 +176,11 @@ class HolderInference:
                 if (bx1 - 30 <= pcx <= bx2 + 30) and (by1 - 30 <= pcy <= by2 + 30):
                     f_inside_bbox = 1.0
 
-            # Score combinado ponderado:
-            # Equilíbrio entre pegada com a mão (f_wrist) e abraço contra o corpo (f_torso)
-            base_score = 0.35 * f_wrist + 0.35 * f_torso + 0.20 * f_comove + 0.10 * f_inside_bbox
+            # Score combinado ponderado configurável:
+            # Equilíbrio entre pegada com a mão (f_wrist), proximidade/abraço ao tronco (f_torso),
+            # co-movimento cinemático (f_comove) e contenção em bounding box 2D (f_inside_bbox)
+            w_w, w_t, w_c, w_b = self.weights
+            base_score = w_w * f_wrist + w_t * f_torso + w_c * f_comove + w_b * f_inside_bbox
 
             # Bônus de abraço: se o artefato estiver colado ao tórax/tronco (< 35 cm)
             if torso_dist < 0.35:
@@ -320,6 +325,9 @@ class HolderInference:
             id_ambiguous = True
             flags.append("lost_donor_track")
 
+        proxemic_zone = ProxemicsAnalyzer.get_zone(dist_interpersonal_m)
+        flags.append(f"zone_{proxemic_zone}")
+
         event = {
             "type": "handoff",
             "timestamp_ms": int(timestamp_s * 1000),
@@ -327,9 +335,11 @@ class HolderInference:
             "receiver_id": receiver_id,
             "duration_s": round(duration_s, 2),
             "distance_interpersonal_m": round(dist_interpersonal_m, 3),
+            "proxemic_zone": proxemic_zone,
             "confidence": 0.85 if not id_ambiguous else 0.50,
             "id_ambiguous": id_ambiguous,
-            "flags": ";".join(flags) if flags else "none"
+            "flags": ";".join(flags) if flags else "none",
+            "details": f"zone:{proxemic_zone};dist:{dist_interpersonal_m:.3f}m"
         }
         self.pending_events.append(event)
 

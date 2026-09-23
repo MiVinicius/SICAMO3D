@@ -82,15 +82,18 @@ def test_pipeline_smoke_execution():
 
         assert pipeline.frame_idx == 5
 
-        # Simula detecções para alimentar o rastreador (mínimo de 3 hits para confirmação de track ativo)
-        simulated_detections = [{
-            "pos_3d": (0.2, 1.1, 2.5),
-            "keypoints_3d": np.ones((17, 4), dtype=np.float32),
+        # Simula detecções remotas recebidas como LISTA via JSON (Issue M0-06)
+        # O edge_node.py transmite keypoints_3d serializados como lista; o pipeline deve converter sem TypeError
+        simulated_detections_list_kpts = [{
+            "pos_3d": [0.2, 1.1, 2.5],
+            "keypoints_3d": np.ones((17, 4), dtype=np.float32).tolist(),  # Serializado como list
             "bbox": [800, 200, 1100, 900],
             "role": "participante"
         }]
         for _ in range(3):
-            pipeline.step(remote_detections=simulated_detections)
+            success, _ = pipeline.step(remote_detections=simulated_detections_list_kpts)
+            assert success
+
         assert len(pipeline.last_tracks) >= 1
         active_id = pipeline.last_tracks[0].track_id
 
@@ -98,6 +101,14 @@ def test_pipeline_smoke_execution():
         pipeline.set_manual_holder(active_id, duration_s=4.0)
         assert pipeline.holder_inference.state == "COM_PORTADOR"
         assert pipeline.holder_inference.holder_id == active_id
+
+        # Valida chamada com assinatura unificada de plush_metrics.update (Issue M0-01)
+        pipeline.plush_metrics.update(
+            tracks=pipeline.last_tracks,
+            holder_info=pipeline.last_holder_result,
+            scene_id="Cena 1",
+            timestamp_s=1.0
+        )
 
         # Testa alternância de facilitador
         pipeline.toggle_facilitator(active_id)
@@ -107,10 +118,43 @@ def test_pipeline_smoke_execution():
         new_scene = pipeline.advance_scene()
         assert new_scene == "Cena 2"
 
-        # Testa exportação de métricas
+        # Testa exportação de métricas preenchida (Issue M0-08 / M1-04)
         metrics_file = os.path.join(tmpdir, "metrics_summary.json")
         pipeline.export_metrics_summary(filepath=metrics_file)
         assert os.path.exists(metrics_file)
 
+        import json
+        with open(metrics_file, "r", encoding="utf-8") as f:
+            summary_data = json.load(f)
+        assert "scenes" in summary_data
+        assert "Cena 1" in summary_data["scenes"]
+        assert "gini_possession_audience" in summary_data["scenes"]["Cena 1"]
+        assert "circulation_ratio" in summary_data["scenes"]["Cena 1"]
+        assert "transition_matrix" in summary_data["scenes"]["Cena 1"]
+
         # Encerramento limpo
         pipeline.close()
+
+def test_pipeline_mode_a_without_object_model(monkeypatch):
+    """
+    Issue M0-04: O Pipeline deve inicializar e rodar normalmente no Modo A
+    mesmo se o modelo de objeto/pelúcia não existir.
+    """
+    from src.core.config import config
+    # Força caminho inexistente de modelo de pelúcia
+    monkeypatch.setattr(config.ai, "object_model_path", "caminho_inexistente_modelo_pelucia.onnx")
+
+    mock_sensor = MockKinectSensor()
+    pipeline = Pipeline(sensor=mock_sensor, enable_logger=False)
+
+    assert pipeline.object_engine is None
+    success, canvas = pipeline.step()
+    assert success
+    assert canvas is not None
+
+    # Simula marcação manual do operador sem detector
+    pipeline.set_manual_holder(track_id=10, duration_s=5.0)
+    assert pipeline.holder_inference.state == "COM_PORTADOR"
+    assert pipeline.holder_inference.holder_id == 10
+    pipeline.close()
+

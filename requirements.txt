@@ -1,5 +1,5 @@
 # ==============================================================================
-# Dependências do Sistema de Captura de Movimento em 3D Multi-Alvo (OpenPTrack Windows)
+# Dependências de Produção — SICAMO3D (Ambiente de Execução em Tempo Real)
 # Python 3.11 (64-bit) no Windows 10/11
 # ==============================================================================
 
@@ -14,14 +14,10 @@ pykinect2>=0.1.0
 comtypes>=1.4.0
 
 # IA e Aceleração de Hardware DirectML (DirectX 12 para GPU AMD / Intel / NVIDIA)
-onnx>=1.16.0
 onnxruntime-directml>=1.19.0
-ultralytics>=8.3.0
 
-# Utilitários de Sistema e Análise Científica
+# Utilitários de Sistema, Configuração e Registro Científico
 psutil>=5.9.0
 PyYAML>=6.0.0
 tqdm>=4.66.0
 pandas>=2.2.0
-pytest>=8.0.0
-

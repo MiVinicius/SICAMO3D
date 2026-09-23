@@ -20,7 +20,7 @@ from src.ai.directml_inference import DirectMLInference
 from src.tracking.tracker_3d import Tracker3D
 from src.socioenative.posture_classifier import PostureClassifier
 from src.socioenative.proxemics import ProxemicsAnalyzer
-from src.socioenative.toy_interaction import ToyInteractionDetector
+from src.experimental.toy_interaction import ToyInteractionDetector
 from src.socioenative.scientific_logger import ScientificLogger
 from src.visualization.dashboard_3d import Dashboard3D
 

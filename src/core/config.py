@@ -60,11 +60,12 @@ class AIConfig:
 
 @dataclass
 class HolderInferenceConfig:
-    wrist_threshold_m: float = 0.45 # Distância máxima punho-pelúcia para considerar pegada
-    torso_threshold_m: float = 0.55 # Distância máxima ao eixo do tronco (cobre abraço)
+    wrist_threshold_m: float = 0.35 # Distância máxima punho-pelúcia para considerar pegada
+    torso_threshold_m: float = 0.45 # Distância máxima ao eixo do tronco (cobre abraço)
     handoff_window_s: float = 2.0   # Janela máxima para completar passagem de posse
     min_score_margin: float = 0.12  # Margem mínima entre 1º e 2º colocado para exclusividade
     state_timeout_s: float = 1.5    # Timeout sem detecção para transitar para INDETERMINADO
+    weights: Tuple[float, float, float, float] = (0.35, 0.35, 0.20, 0.10)
 
 @dataclass
 class ProxemicsConfig:

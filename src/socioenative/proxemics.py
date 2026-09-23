@@ -9,9 +9,9 @@ from src.core.config import config
 class ProxemicsAnalyzer:
     @staticmethod
     def get_zone(distance_m: float) -> str:
-        intimate = getattr(config.proxemics, "intimate_max_m", 0.35)
-        personal = getattr(config.proxemics, "personal_max_m", 1.00)
-        social = getattr(config.proxemics, "social_max_m", 2.50)
+        intimate = getattr(config.proxemics, "intimate_threshold_m", getattr(config.proxemics, "intimate_max_m", 0.35))
+        personal = getattr(config.proxemics, "personal_threshold_m", getattr(config.proxemics, "personal_max_m", 1.00))
+        social = getattr(config.proxemics, "social_threshold_m", getattr(config.proxemics, "social_max_m", 2.50))
         if distance_m < intimate:
             return "intima"
         elif distance_m < personal:

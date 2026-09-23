@@ -1,14 +1,18 @@
 # ==============================================================================
-# .gitignore - Sistema de Captura de Movimento em 3D Multi-Alvo (OpenPTrack Windows)
+# .gitignore - SICAMO3D: Sistema de Inferência com Captura de Movimento 3D
 # ==============================================================================
 
-# --- Ambientes Virtuais ---
+# --- Ambientes Virtuais e Pacotes ---
 .venv/
 venv/
 env/
 ENV/
 env.bak/
 venv.bak/
+pip-wheel-metadata/
+*.egg-info/
+dist/
+build/
 
 # --- Caches e Bytecode Python ---
 __pycache__/
@@ -17,24 +21,58 @@ __pycache__/
 *.so
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.coverage.*
 
 # --- Modelos de Redes Neurais e Pesos Binários ---
-# O GitHub rejeita arquivos > 100 MB e pesos não devem ser versionados diretamente.
+# Arquivos binários pesados não devem ser versionados no Git.
+# O download é realizado via `python tools/download_weights.py`.
 *.pt
 *.pth
 *.onnx
 *.bin
 *.engine
 *.weights
+*.tflite
+*.mlmodel
 weights/*
 !weights/README.md
 !weights/.gitkeep
 
+# --- Datasets e Dados de Treinamento Locais ---
+# Imagens brutas, recortes e anotações locais de treino
+datasets/
+dataset_plush/
+data/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# --- Treinamento e Checkpoints (Ultralytics YOLO) ---
+# Artefatos gerados automaticamente por tools/train_plush_detector.py
+runs/
+.ultralytics/
+
+# --- Calibração Física Local do Sensor / Sala ---
+# Gerada automaticamente na detecção do plano do chão pelo Kinect v2 no local físico
+config/calibration.json
+config/*_calibration.json
+
 # --- Datasets e Gravações Científicas Locais ---
+# Sessões gravadas contendo trajectories.csv, plush_state.csv, etc.
 recordings/*
 !recordings/.gitkeep
 
-# --- Saídas de Testes e Amostras de Imagem ---
+# --- Relatórios e Análises Geradas pelo ETL / BI ---
+# Saídas geradas por `python tools/etl.py`
+relatorios/
+reports/
+
+# --- Saídas de Testes, Capturas e Amostras de Imagem/Vídeo ---
 pipeline_output.jpg
 sample_kinect_color.jpg
 sample_kinect_depth.jpg
@@ -42,6 +80,14 @@ tests/*.jpg
 tests/*.png
 *.avi
 *.mp4
+*.mkv
+
+# --- Logs, Dumps e Arquivos Temporários ---
+*.log
+*.tmp
+*.bak
+*.dmp
+crash_dump*
 
 # --- Arquivos de IDEs e Editores ---
 .vscode/
@@ -59,7 +105,8 @@ Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
 
-# --- Logs e Arquivos Temporários ---
-*.log
-*.tmp
-*.bak
+# --- Variáveis de Ambiente e Segredos Locais ---
+.env
+.env.local
+*.key
+*.secret

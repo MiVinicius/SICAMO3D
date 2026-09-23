@@ -121,3 +121,68 @@ def test_operator_manual_override():
     assert res["state"] == "COM_PORTADOR"
     assert res["holder_id"] == 2
     assert res["source"] == "manual"
+
+def test_id_ambiguous_during_handoff_with_recent_track():
+    """
+    Issue M1-05: Se durante o handoff o track doador ou receptor nasceu
+    recentemente (dwell_time_s < 2.0s), o evento deve marcar id_ambiguous = True.
+    """
+    inference = HolderInference(handoff_window_s=2.0)
+    trk_a = _create_synthetic_track(1, pos=(0.0, 1.0, 2.0), hand_right_pos=(0.1, 1.0, 2.0), dwell_time_s=5.0)
+    # Receptor acabou de nascer no tracker (dwell_time_s = 0.5s)
+    trk_b = _create_synthetic_track(2, pos=(0.5, 1.0, 2.0), hand_right_pos=(0.4, 1.0, 2.0), dwell_time_s=0.5)
+
+    # Frame 1: A segura a pelúcia
+    plush_a = [{"pos_3d": (0.1, 1.0, 2.0), "confidence": 0.90}]
+    inference.process([trk_a, trk_b], plush_a, timestamp_s=1.0)
+
+    # Frame 2: Pelúcia vai para a mão de B
+    plush_b = [{"pos_3d": (0.4, 1.0, 2.0), "confidence": 0.90}]
+    res2 = inference.process([trk_a, trk_b], plush_b, timestamp_s=1.3)
+    assert res2["state"] == "PASSAGEM"
+
+    # Frame 3: Passagem consolidada
+    res3 = inference.process([trk_a, trk_b], plush_b, timestamp_s=1.8)
+    assert res3["state"] == "COM_PORTADOR"
+    assert res3["holder_id"] == 2
+    assert len(res3["events"]) == 1
+    ev = res3["events"][0]
+    assert ev["type"] == "handoff"
+    assert ev["id_ambiguous"] is True
+    assert "recent_track_birth" in ev["flags"]
+
+def test_plush_on_table_stability_no_oscillation():
+    """
+    Issue M1-05: Pelúcia parada na mesa, sem ninguém perto, deve se manter
+    estavelmente em SEM_PORTADOR sem oscilação.
+    """
+    inference = HolderInference()
+    trk_far = _create_synthetic_track(1, pos=(2.5, 1.0, 3.5), hand_right_pos=(2.5, 1.0, 3.5))
+    plush_table = [{"pos_3d": (0.0, 0.75, 1.5), "confidence": 0.85}]
+
+    for step in range(10):
+        t = 1.0 + step * 0.1
+        res = inference.process([trk_far], plush_table, timestamp_s=t)
+        assert res["state"] == "SEM_PORTADOR"
+        assert res["holder_id"] is None
+
+def test_holder_leaves_stand_clean_transition():
+    """
+    Issue M1-05: Portador sai do stand (sai do alcance confiável ou deixa de ser detectado):
+    o sistema deve transitar corretamente de estado sem crash nem retenção indevida de posse.
+    """
+    inference = HolderInference()
+    trk_a = _create_synthetic_track(1, pos=(0.0, 1.0, 2.0), hand_right_pos=(0.1, 1.0, 2.0))
+    plush_a = [{"pos_3d": (0.1, 1.0, 2.0), "confidence": 0.90}]
+
+    # Frame 1: A é o portador
+    res1 = inference.process([trk_a], plush_a, timestamp_s=1.0)
+    assert res1["state"] == "COM_PORTADOR"
+    assert res1["holder_id"] == 1
+
+    # Frame 2: A saiu do stand (não há tracks ativos no alcance, mas a pelúcia foi deixada em repouso na mesa)
+    plush_table = [{"pos_3d": (0.0, 0.75, 2.0), "confidence": 0.85}]
+    res2 = inference.process([], plush_table, timestamp_s=1.2)
+    assert res2["state"] == "SEM_PORTADOR"
+    assert res2["holder_id"] is None
+

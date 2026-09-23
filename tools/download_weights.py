@@ -38,10 +38,20 @@ def prepare_weights():
     else:
         print(f"[1/2] YOLO11s-Pose já presente: {pose_onnx.name}")
 
-    # 2. YOLOv8m World v2 (Objetos / Brinquedos em Vocabulário Aberto)
+    # 2. YOLO11s Custom Plush Detector (Single-Class: pelucia)
+    plush_onnx = WEIGHTS_DIR / "yolo11s_plush.onnx"
+    if not plush_onnx.exists():
+        print("[2/3] Modelo customizado da pelúcia (yolo11s_plush.onnx) não encontrado localmente.")
+        print("      -> Para treinar e exportar a partir do seu dataset rotulado:")
+        print("         python tools/train_plush_detector.py --data datasets/plush_dataset.yaml --epochs 50")
+        print("      -> Ou copie os pesos pré-treinados 'yolo11s_plush.onnx' diretamente para esta pasta.\n")
+    else:
+        print(f"[2/3] YOLO11s-Plush (custom) já presente: {plush_onnx.name}")
+
+    # 3. YOLOv8m World v2 (Objetos / Brinquedos em Vocabulário Aberto - Fallback)
     world_onnx = WEIGHTS_DIR / "yolov8m-worldv2.onnx"
     if not world_onnx.exists():
-        print("[2/2] Baixando e exportando YOLOv8m-Worldv2 para ONNX com vocabulário customizado...")
+        print("[3/3] Baixando e exportando YOLOv8m-Worldv2 para ONNX com vocabulário customizado...")
         try:
             model_world = YOLO("yolov8m-worldv2.pt")
             # Vocabulário científico para IHC e análise socioenativa
@@ -62,7 +72,7 @@ def prepare_weights():
         except Exception as e:
             print(f"[ERRO] Falha ao exportar YOLOv8m-Worldv2: {e}\n")
     else:
-        print(f"[2/2] YOLOv8m-Worldv2 já presente: {world_onnx.name}")
+        print(f"[3/3] YOLOv8m-Worldv2 já presente: {world_onnx.name}")
 
     print("=== TODOS OS MODELOS FORAM VERIFICADOS COM SUCESSO! ===")
 

@@ -15,6 +15,7 @@ from src.socioenative.plush_metrics import PlushMetricsAnalyzer
 from src.socioenative.scientific_logger import ScientificLogger
 from src.socioenative.posture_classifier import PostureClassifier
 from src.socioenative.proxemics import ProxemicsAnalyzer
+from src.socioenative.f_formations import FFormationDetector
 from src.visualization.dashboard_3d import Dashboard3D
 
 class Pipeline:
@@ -66,7 +67,8 @@ class Pipeline:
             torso_thresh_m=config.holder.torso_threshold_m,
             handoff_window_s=config.holder.handoff_window_s,
             min_margin=config.holder.min_score_margin,
-            timeout_s=config.holder.state_timeout_s
+            timeout_s=config.holder.state_timeout_s,
+            weights=getattr(config.holder, "weights", (0.35, 0.35, 0.20, 0.10))
         )
         self.plush_metrics = PlushMetricsAnalyzer()
         self.plush_metrics.set_scene(self.zone_manager.current_scene_id)
@@ -94,6 +96,8 @@ class Pipeline:
         self.last_proxemic_events: List[Dict] = []
         self.last_joint_events: List[Dict] = []
         self.last_zone_evaluations: List[Dict] = []
+        self.f_formation_detector = FFormationDetector()
+        self.last_f_formations: List = []
 
     def advance_scene(self) -> str:
         """Avança cena no ZoneManager e PlushMetrics (Atalho 'N')."""
@@ -145,22 +149,28 @@ class Pipeline:
         """
         Supressão de detecção de pose duplicada na pelúcia:
         Verifica se a pose humana detectada é na verdade a própria pelúcia (boneco/urso)
-        com base na sobreposição de bounding box e dimensão métrica ínfima.
+        com base na sobreposição de bounding box e dimensão métrica ínfima de tronco (< 25 cm).
         """
         p_box = pose_det.get("bbox", [0, 0, 0, 0])
         for pc in plush_candidates:
             c_box = pc.get("bbox", [0, 0, 0, 0])
             iou = self._bbox_iou(p_box, c_box)
             if iou > 0.30:
-                # Se houver sobreposição e o tamanho vertical for muito pequeno (< 0.40m), é fantasma
+                # Se houver sobreposição significativa com a pelúcia:
                 if kpts_3d is not None:
-                    # Distância ombros-quadris ou altura total
                     conf = kpts_3d[:, 3]
+                    # Se detectou ombro e quadril, avalia altura métrica do tronco
                     if conf[5] > 0.2 and conf[11] > 0.2:
                         torso_h = float(np.linalg.norm(kpts_3d[5, :3] - kpts_3d[11, :3]))
-                        if torso_h < 0.20:
+                        if torso_h < 0.25:
                             return True
-                return True
+                        # Se o tronco for de tamanho humano (> 0.25m), é uma pessoa real segurando a pelúcia
+                        continue
+                    # Se não há pontos anatômicos confiáveis de tronco, é pose espúria na pelúcia
+                    return True
+                # Sem 3D, se IoU for muito alto (> 0.60), é fantasma
+                if iou > 0.60:
+                    return True
         return False
 
     def step(self, remote_detections: Optional[List[Dict]] = None) -> Tuple[bool, Optional[np.ndarray]]:
@@ -242,7 +252,9 @@ class Pipeline:
             if self._is_plush_ghost_pose(p, plush_candidates, kpts_3d):
                 continue
 
-            # Âncora anatômica alta e estável: tórax ou ombros (sem o nariz)
+            # Âncora anatômica alta e estável: tórax e tronco (ombros 5,6 e quadris 11,12)
+            # Decisão de engenharia (Issue M1-06): a cabeça/nariz possui movimentos independentes
+            # de alta frequência e frequentes oclusões. Ombros e quadris garantem o centro de massa estável.
             center_3d = None
             torso_pts = []
             for idx in [5, 6, 11, 12]:  # ombros e quadris
@@ -280,11 +292,28 @@ class Pipeline:
         # 5. Avaliação de Zonas e Papéis
         self.last_zone_evaluations = self.zone_manager.evaluate_tracks(active_tracks)
 
+        # Registro de eventos de zona (enter / exit) em events.csv (Issue M1-01)
+        if self.logger:
+            for z_ev in self.zone_manager.pending_zone_events:
+                self.logger.log_event(
+                    event_type=z_ev["type"],
+                    scene_id=self.zone_manager.current_scene_id,
+                    t_capture_ms=t_capture_ms,
+                    donor_id=z_ev.get("track_id"),
+                    details=z_ev.get("details", "")
+                )
+
         # 6. Classificação Postural e Proxêmica
         for trk in active_tracks:
             trk.posture = PostureClassifier.classify(trk.last_keypoints_3d)
         proxemic_events = ProxemicsAnalyzer.calculate_pairwise(active_tracks)
         self.last_proxemic_events = proxemic_events
+
+        # 6.1 Detecção de F-Formations (Kendon / Cristani et al.)
+        best_cand = plush_candidates[0] if plush_candidates else None
+        plush_pos_3d = best_cand.get("pos_3d") if best_cand else None
+        f_formations = self.f_formation_detector.detect(active_tracks, plush_pos=plush_pos_3d)
+        self.last_f_formations = f_formations
 
         # 7. Inferência de Portador da Pelúcia (Modo A / Modo B)
         holder_info = self.holder_inference.process(
@@ -294,10 +323,16 @@ class Pipeline:
         )
         self.last_holder_result = holder_info
 
-        # 8. Métricas de Circulação da Pelúcia
+        # 8. Métricas de Circulação da Pelúcia (Issue M1-03)
+        # Filtra tracks pelo alcance confiável para não contaminar métricas
+        valid_metric_tracks = []
+        for trk, ev in zip(active_tracks, self.last_zone_evaluations):
+            if ev.get("in_reliable_range", True):
+                valid_metric_tracks.append(trk)
+
         current_scene = self.zone_manager.current_scene_id
         self.plush_metrics.update(
-            tracks=active_tracks,
+            tracks=valid_metric_tracks,
             holder_info=holder_info,
             scene_id=current_scene,
             timestamp_s=t_capture
@@ -309,7 +344,8 @@ class Pipeline:
                 "n_persons": len(active_tracks),
                 "n_plush_candidates": len(plush_candidates),
                 "holder_state": holder_info.get("state"),
-                "holder_id": holder_info.get("holder_id")
+                "holder_id": holder_info.get("holder_id"),
+                "n_f_formations": len(f_formations)
             }
             self.logger.log_frame(
                 t_capture_ms=t_capture_ms,
@@ -348,9 +384,14 @@ class Pipeline:
         for sc_name, sc_info in self.plush_metrics.scenes_data.items():
             all_handoffs.extend(sc_info.get("handoffs", []))
 
+        scenes_summary = {
+            sc_id: self.plush_metrics.get_scene_summary(sc_id)
+            for sc_id in self.plush_metrics.scenes_data
+        }
+
         summary = {
             "version": config.version,
-            "scenes": self.plush_metrics.get_scene_summary(),
+            "scenes": scenes_summary,
             "handoff_count_total": len(all_handoffs),
             "handoffs": all_handoffs
         }

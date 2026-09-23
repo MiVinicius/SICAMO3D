@@ -98,3 +98,74 @@ def test_scientific_logger_v3_empty_room_continuity(tmp_path):
     # Linha 1: track_id deve ser 1
     assert df_traj.iloc[1]["track_id"] == 1
     assert df_traj.iloc[1]["role"] == "participante"
+
+def test_person_heading_and_attention_angular_diff():
+    """
+    Issue M0-03: Valida cálculo de heading corporal e atenção angular da plateia:
+    - Ombros voltados para o portador -> angular_diff ~ 0° (atenção capturada)
+    - De costas para o portador -> angular_diff ~ 180° (sem atenção)
+    - Voltado para a direita (+X) -> heading ~ +90°
+    - Voltado para a esquerda (-X) -> heading ~ -90°
+    """
+    analyzer = PlushMetricsAnalyzer()
+    analyzer.set_scene("Cena 1")
+
+    # Portador em (0.0, 1.2, 4.0)
+    holder_trk = Track3D(track_id=1, init_pos=(0.0, 1.2, 4.0))
+
+    # Participante em (0.0, 1.2, 2.0)
+    audience_trk = Track3D(track_id=2, init_pos=(0.0, 1.2, 2.0))
+    k3d = np.zeros((17, 4), dtype=np.float32)
+
+    # Caso 1: Ombros voltados para o portador (+Z, costas para a câmera)
+    # Ombro esquerdo anatômico (idx 5) em -X, direito anatômico (idx 6) em +X
+    k3d[5] = [-0.20, 1.4, 2.0, 0.9]
+    k3d[6] = [+0.20, 1.4, 2.0, 0.9]
+    audience_trk.last_keypoints_3d = k3d.copy()
+
+    heading_facing_holder = analyzer._estimate_person_heading(audience_trk)
+    assert heading_facing_holder is not None
+    assert abs(heading_facing_holder - 0.0) < 5.0  # ~ 0° (+Z)
+
+    # Executa update com participante voltado para o portador
+    holder_info = {
+        "state": "COM_PORTADOR",
+        "holder_id": 1,
+        "confidence": 0.95,
+        "events": []
+    }
+    analyzer.update([holder_trk, audience_trk], holder_info=holder_info, scene_id="Cena 1", timestamp_s=0.1)
+    samples = analyzer.scenes_data["Cena 1"]["attention_samples"]
+    assert len(samples) > 0
+    assert samples[-1]["ratio_35"] == 1.0  # 100% da plateia atenta dentro do cone de 35°
+
+    # Caso 2: De costas para o portador (voltado para a câmera, -Z)
+    # Ombro esquerdo em +X, direito em -X
+    k3d[5] = [+0.20, 1.4, 2.0, 0.9]
+    k3d[6] = [-0.20, 1.4, 2.0, 0.9]
+    audience_trk.last_keypoints_3d = k3d.copy()
+
+    heading_facing_away = analyzer._estimate_person_heading(audience_trk)
+    assert heading_facing_away is not None
+    assert abs(abs(heading_facing_away) - 180.0) < 5.0  # ~ 180° / -180° (-Z)
+
+    analyzer.update([holder_trk, audience_trk], holder_info=holder_info, scene_id="Cena 1", timestamp_s=0.2)
+    samples = analyzer.scenes_data["Cena 1"]["attention_samples"]
+    assert samples[-1]["ratio_35"] == 0.0  # 0% atenta quando de costas
+
+    # Caso 3: Voltado para a direita (+X): ombro esquerdo em +Z, direito em -Z
+    k3d[5] = [0.0, 1.4, 2.20, 0.9]
+    k3d[6] = [0.0, 1.4, 1.80, 0.9]
+    audience_trk.last_keypoints_3d = k3d.copy()
+    heading_right = analyzer._estimate_person_heading(audience_trk)
+    assert heading_right is not None
+    assert abs(heading_right - 90.0) < 5.0  # ~ +90° (+X)
+
+    # Caso 4: Voltado para a esquerda (-X): ombro esquerdo em -Z, direito em +Z
+    k3d[5] = [0.0, 1.4, 1.80, 0.9]
+    k3d[6] = [0.0, 1.4, 2.20, 0.9]
+    audience_trk.last_keypoints_3d = k3d.copy()
+    heading_left = analyzer._estimate_person_heading(audience_trk)
+    assert heading_left is not None
+    assert abs(heading_left - (-90.0)) < 5.0  # ~ -90° (-X)
+
