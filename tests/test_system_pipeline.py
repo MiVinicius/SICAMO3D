@@ -88,8 +88,11 @@ def main():
                 center_3d = np.mean(valid_pts, axis=0)
             else:
                 bx1, by1, bx2, by2 = p['bbox']
-                fb_pt = sensor.get_3d_point_from_color((bx1 + bx2) / 2.0, (by1 + by2) / 2.0)
-                center_3d = np.array(fb_pt) if fb_pt is not None else np.array([0.0, 0.0, 1.8])
+                fb_pt = sensor.get_3d_point_from_color((bx1 + bx2) / 2.0, by1 + 0.30 * (by2 - by1))
+                center_3d = np.array(fb_pt) if fb_pt is not None else None
+
+            if center_3d is None or center_3d[2] < 0.40 or center_3d[2] > 7.5:
+                continue
 
             person_detections_3d.append({
                 "pos_3d": (float(center_3d[0]), float(center_3d[1]), float(center_3d[2])),

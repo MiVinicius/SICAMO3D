@@ -22,10 +22,11 @@ class Track3D:
         self.kf = KalmanFilter3D(init_pos)
         self.hits = 1
         self.time_since_update = 0
-        self.is_confirmed = False # Exige pelo menos 2 detecções consistentes para confirmar
+        self.min_hits_to_confirm = getattr(config.tracking, 'min_hits_to_confirm', 4)
+        self.is_confirmed = False # Exige min_hits_to_confirm (4 frames = ~133ms) para confirmar track real
         
-        # Filtro temporal de articulações para eliminar trepidação e linhas piscando
-        self.kpt_filter = KeypointFilter(alpha=config.tracking.keypoint_smoothing_alpha, max_missed_frames=4)
+        # Filtro temporal de articulações ágil para eliminar trepidação sem arrastar membros
+        self.kpt_filter = KeypointFilter(alpha=config.tracking.keypoint_smoothing_alpha, max_missed_frames=1)
         
         # Histórico de trajetória no espaço métrico real 3D (com deadzone anti-jitter)
         self.history: deque = deque(maxlen=200)
@@ -58,7 +59,7 @@ class Track3D:
         self.hits += 1
         self.time_since_update = 0
         self.last_seen_time = time.time()
-        if self.hits >= 2:
+        if self.hits >= self.min_hits_to_confirm:
             self.is_confirmed = True
         
         cur_pos = self.kf.position
@@ -164,11 +165,82 @@ class Track3D:
 
 
 class Tracker3D:
-    def __init__(self, max_distance_m: float = 0.85, max_lost_frames: int = 30):
+    def __init__(self, 
+                 max_distance_m: float = 0.85, 
+                 max_lost_frames: int = 30,
+                 merge_dist_m: Optional[float] = None,
+                 merge_iou: Optional[float] = None):
         self.max_distance_m = max_distance_m
         self.max_lost_frames = max_lost_frames
+        self.merge_dist_m = merge_dist_m if merge_dist_m is not None else getattr(config.tracking, 'track_merge_dist_m', 0.55)
+        self.merge_iou = merge_iou if merge_iou is not None else getattr(config.tracking, 'track_merge_iou', 0.35)
         self.tracks: List[Track3D] = []
         self._next_id = 1
+
+    @staticmethod
+    def _compute_iou(box_a: List[float], box_b: List[float]) -> float:
+        """Calcula a Intersection over Union (IoU) 2D entre duas caixas [x1, y1, x2, y2]."""
+        xA = max(box_a[0], box_b[0])
+        yA = max(box_a[1], box_b[1])
+        xB = min(box_a[2], box_b[2])
+        yB = min(box_a[3], box_b[3])
+        inter_area = max(0.0, xB - xA) * max(0.0, yB - yA)
+        box_a_area = max(0.0, box_a[2] - box_a[0]) * max(0.0, box_a[3] - box_a[1])
+        box_b_area = max(0.0, box_b[2] - box_b[0]) * max(0.0, box_b[3] - box_b[1])
+        union_area = box_a_area + box_b_area - inter_area
+        if union_area <= 0.0:
+            return 0.0
+        return float(inter_area / union_area)
+
+    def _merge_overlapping_tracks(self):
+        """
+        Fusão ativa de tracks sobrepostos (Track-Level NMS 3D).
+        Se dois tracks estiverem a menos de merge_dist_m no 3D ou tiverem IoU > merge_iou no 2D,
+        o track mais confiável/antigo absorve o secundário e o secundário é eliminado imediatamente.
+        """
+        if len(self.tracks) < 2:
+            return
+
+        to_remove = set()
+        # Ordena priorizando: confirmados primeiro, mais hits, menor ID (mais antigo)
+        sorted_indices = sorted(
+            range(len(self.tracks)),
+            key=lambda i: (self.tracks[i].is_confirmed, self.tracks[i].hits, -self.tracks[i].track_id),
+            reverse=True
+        )
+
+        for idx_a in range(len(sorted_indices)):
+            i = sorted_indices[idx_a]
+            if i in to_remove:
+                continue
+            trk_a = self.tracks[i]
+            pos_a = np.array(trk_a.position)
+
+            for idx_b in range(idx_a + 1, len(sorted_indices)):
+                j = sorted_indices[idx_b]
+                if j in to_remove:
+                    continue
+                trk_b = self.tracks[j]
+                pos_b = np.array(trk_b.position)
+
+                dist_3d = float(np.linalg.norm(pos_a - pos_b))
+                iou_2d = 0.0
+                if trk_a.last_bbox is not None and trk_b.last_bbox is not None:
+                    iou_2d = self._compute_iou(trk_a.last_bbox, trk_b.last_bbox)
+
+                # Critério de fusão: sobreposição no 3D (< 55cm) ou no 2D (IoU > 0.35)
+                if dist_3d < self.merge_dist_m or iou_2d > self.merge_iou:
+                    # trk_a (mestre) absorve histórico e confirmação de trk_b
+                    trk_a.hits = max(trk_a.hits, trk_b.hits)
+                    trk_a.time_since_update = min(trk_a.time_since_update, trk_b.time_since_update)
+                    if trk_b.is_confirmed:
+                        trk_a.is_confirmed = True
+                    if trk_b.held_toy and not trk_a.held_toy:
+                        trk_a.held_toy = trk_b.held_toy
+                    to_remove.add(j)
+
+        if to_remove:
+            self.tracks = [t for idx, t in enumerate(self.tracks) if idx not in to_remove]
 
     def update(self, detections: List[Dict]) -> List[Track3D]:
         """
@@ -180,7 +252,7 @@ class Tracker3D:
             trk.predict()
 
         if len(detections) == 0:
-            self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_lost_frames]
+            self.tracks = [t for t in self.tracks if (t.is_confirmed and t.time_since_update <= self.max_lost_frames) or (not t.is_confirmed and t.time_since_update <= 2)]
             return [t for t in self.tracks if t.is_confirmed]
 
         # 2. Constrói matriz de custo com distância euclidiana 3D
@@ -237,7 +309,10 @@ class Tracker3D:
                 self._next_id += 1
                 self.tracks.append(new_track)
 
-        # 3. Limpeza de tracks perdidos por muito tempo
-        self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_lost_frames]
+        # 3. Fusão ativa de tracks sobrepostos (Anti-Ghost / Track NMS 3D)
+        self._merge_overlapping_tracks()
+
+        # 4. Limpeza de tracks perdidos (fantasmas não confirmados são podados em apenas 2 frames)
+        self.tracks = [t for t in self.tracks if (t.is_confirmed and t.time_since_update <= self.max_lost_frames) or (not t.is_confirmed and t.time_since_update <= 2)]
 
         return [t for t in self.tracks if t.is_confirmed]

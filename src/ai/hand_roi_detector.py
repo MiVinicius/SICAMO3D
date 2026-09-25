@@ -26,7 +26,7 @@ class HandROIDetector:
                 object_engine, 
                 sensor, 
                 toy_classes: Dict[int, str],
-                conf_thresh: float = 0.08,
+                conf_thresh: float = 0.25,
                 current_toys: Optional[List[Dict]] = None) -> Tuple[List[Dict], List[Dict]]:
         """
         Processa com alta eficiência: prioriza a mão em interação com o brinquedo e avalia
@@ -102,19 +102,25 @@ class HandROIDetector:
         if crop_w >= 80 and crop_h >= 80:
             raw_crop = color_1080p[y1:y2, x1:x2]
 
-            # Inferência única no recorte da mão selecionada
+            # Inferência única no recorte da mão selecionada com limiar confiável (rejeita pele/mãos nuas)
             c_blob, c_ratio, c_pad = object_engine.preprocess(raw_crop)
             c_raw = object_engine.run_raw(c_blob)
             c_dets = object_engine.postprocess_objects(
                 c_raw, c_ratio, c_pad, (crop_h, crop_w),
-                toy_classes, conf_thresh=min(conf_thresh, 0.08)
+                toy_classes, conf_thresh=conf_thresh
             )
 
             crop_annotated = cv2.resize(raw_crop, (180, 180))
             current_hand_toys = []
 
             for cd in c_dets:
+                if cd['confidence'] < conf_thresh:
+                    continue
+
                 cbx1, cby1, cbx2, cby2 = cd['bbox']
+                # Se a caixa cobrir mais de 85% do recorte inteiro, é ruído da borda do crop
+                if ((cbx2 - cbx1) * (cby2 - cby1)) / max(1, crop_w * crop_h) > 0.85:
+                    continue
                 global_bx1 = float(cbx1 + x1)
                 global_by1 = float(cby1 + y1)
                 global_bx2 = float(cbx2 + x1)

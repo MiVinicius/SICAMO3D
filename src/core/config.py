@@ -44,9 +44,10 @@ class AIConfig:
     pose_model_path: str = "weights/yolo11s-pose.onnx"
     object_model_path: str = "weights/yolov8m-worldv2.onnx" # Modelo YOLO-World Medium (Fase 3: Backbone Aprimorado)
     img_size: int = 640
-    conf_threshold: float = 0.35
+    conf_threshold: float = 0.38       # Equilíbrio ideal: rastreamento de pessoa estável sem perder tracks ao girar
     iou_threshold: float = 0.45
-    toy_conf_threshold: float = 0.08 # Limiar permissivo para capturar Toad e brinquedos
+    pose_iou_threshold: float = 0.28   # NMS estrito para poses: elimina detecções duplas/sombras no mesmo indivíduo
+    toy_conf_threshold: float = 0.25   # Elevado de 0.08 para 0.25: elimina falsos positivos onde mãos eram detectadas como pelúcia
 
     def __post_init__(self):
         self.pose_model_path = resolve_model_path(self.pose_model_path)
@@ -68,9 +69,12 @@ class AIConfig:
 @dataclass
 class TrackingConfig:
     max_distance_threshold: float = 0.85  # Metros para associação de pessoa no 3D
-    max_frames_to_keep_lost: int = 30     # 1 segundo a 30 FPS para manter track perdido
+    max_frames_to_keep_lost: int = 30     # 1 segundo a 30 FPS para manter track estável durante oclusões breves
     proximity_toy_threshold_m: float = 0.40 # 40 cm da mão para considerar posse de brinquedo
-    keypoint_smoothing_alpha: float = 0.65  # Suavização temporal (elimina trepidação)
+    keypoint_smoothing_alpha: float = 0.82  # Suavização ágil: elimina arraste/sombra de membros em movimento
+    min_hits_to_confirm: int = 4          # Exige 4 frames (~133ms) para confirmar track, eliminando fantasmas transitórios
+    track_merge_dist_m: float = 0.55      # Distância métrica 3D para fusão de tracks sobrepostos (Track NMS 3D)
+    track_merge_iou: float = 0.35         # IoU 2D para fusão de bboxes do mesmo indivíduo
 
 @dataclass
 class NetworkConfig:

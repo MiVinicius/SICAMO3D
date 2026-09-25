@@ -224,8 +224,9 @@ class Dashboard3D:
             hand_str = f" | Mão: {int(min_hand_dist * 100)}cm" if min_hand_dist < 0.60 else ""
             src_tag = " [ROI]" if toy.get('source') == 'hand_roi' else ""
             phys_tag = f" ({int(toy['physical_diameter_m']*100)}cm 3D)" if 'physical_diameter_m' in toy else ""
+            conf_str = f" {int(toy.get('confidence', 0)*100)}%"
 
-            lbl = f"{toy['class_name']}{src_tag}{phys_tag} [{cam_dist_str}{hand_str}]"
+            lbl = f"{toy['class_name']}{conf_str}{src_tag}{phys_tag} [{cam_dist_str}{hand_str}]"
             cv2.putText(target_img, lbl, (bx1, max(18, by1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 
                         0.48 if is_fullscreen else 0.42, (0, 215, 255), 2)
 
@@ -271,45 +272,47 @@ class Dashboard3D:
                                0 <= u1 < target_img.shape[1] and 0 <= v1 < target_img.shape[0]:
                                 cv2.line(target_img, (u0, v0), (u1, v1), c_fade, th)
 
-            # Caixa delimitadora
-            if trk.last_bbox is not None and skeleton_mode > 0:
-                bx1, by1, bx2, by2 = [int(v * (scale_x if i%2==0 else scale_y)) for i, v in enumerate(trk.last_bbox)]
-                cv2.rectangle(target_img, (bx1, by1), (bx2, by2), color, 2)
+            # Elementos 2D na Câmera: desenhados APENAS se a pessoa foi detectada neste frame (time_since_update == 0)
+            # Evita totalmente "sombras" ou esqueletos fantasmas congelados de frames anteriores
+            if trk.time_since_update == 0:
+                # Caixa delimitadora
+                if trk.last_bbox is not None and skeleton_mode > 0:
+                    bx1, by1, bx2, by2 = [int(v * (scale_x if i%2==0 else scale_y)) for i, v in enumerate(trk.last_bbox)]
+                    cv2.rectangle(target_img, (bx1, by1), (bx2, by2), color, 2)
 
-            # Esqueleto COCO
-            if trk.last_keypoints_2d is not None and skeleton_mode == 2:
-                kpts_2d = trk.last_keypoints_2d
-                for u, v in self.skeleton_edges:
-                    if kpts_2d[u, 2] > 0.20 and kpts_2d[v, 2] > 0.20:
-                        p1 = (int(kpts_2d[u, 0] * scale_x), int(kpts_2d[u, 1] * scale_y))
-                        p2 = (int(kpts_2d[v, 0] * scale_x), int(kpts_2d[v, 1] * scale_y))
-                        cv2.line(target_img, p1, p2, color, 2)
-                        cv2.circle(target_img, p1, 3, (255, 255, 255), -1)
-                        cv2.circle(target_img, p2, 3, (255, 255, 255), -1)
+                # Esqueleto COCO (limiar elevado para 0.35 para eliminar articulações falsas em sombras no chão/parede)
+                if trk.last_keypoints_2d is not None and skeleton_mode == 2:
+                    kpts_2d = trk.last_keypoints_2d
+                    for u, v in self.skeleton_edges:
+                        if kpts_2d[u, 2] >= 0.35 and kpts_2d[v, 2] >= 0.35:
+                            p1 = (int(kpts_2d[u, 0] * scale_x), int(kpts_2d[u, 1] * scale_y))
+                            p2 = (int(kpts_2d[v, 0] * scale_x), int(kpts_2d[v, 1] * scale_y))
+                            cv2.line(target_img, p1, p2, color, 2)
+                            cv2.circle(target_img, p1, 3, (255, 255, 255), -1)
+                            cv2.circle(target_img, p2, 3, (255, 255, 255), -1)
 
-            # Mãos destacadas (se skeleton_mode >= 1)
-            if skeleton_mode >= 1:
-                left_2d, right_2d = trk.hands_2d
-                left_3d, right_3d = trk.hands_3d
-                if left_2d is not None:
-                    hx, hy = int(left_2d[0] * scale_x), int(left_2d[1] * scale_y)
-                    cv2.circle(target_img, (hx, hy), 7, (0, 255, 255), -1)
-                    cv2.circle(target_img, (hx, hy), 10, (255, 255, 255), 2)
-                if right_2d is not None:
-                    hx, hy = int(right_2d[0] * scale_x), int(right_2d[1] * scale_y)
-                    cv2.circle(target_img, (hx, hy), 7, (0, 255, 255), -1)
-                    cv2.circle(target_img, (hx, hy), 10, (255, 255, 255), 2)
+                # Mãos destacadas (se skeleton_mode >= 1)
+                if skeleton_mode >= 1:
+                    left_2d, right_2d = trk.hands_2d
+                    if left_2d is not None:
+                        hx, hy = int(left_2d[0] * scale_x), int(left_2d[1] * scale_y)
+                        cv2.circle(target_img, (hx, hy), 7, (0, 255, 255), -1)
+                        cv2.circle(target_img, (hx, hy), 10, (255, 255, 255), 2)
+                    if right_2d is not None:
+                        hx, hy = int(right_2d[0] * scale_x), int(right_2d[1] * scale_y)
+                        cv2.circle(target_img, (hx, hy), 7, (0, 255, 255), -1)
+                        cv2.circle(target_img, (hx, hy), 10, (255, 255, 255), 2)
 
-            # Cabeçalho com ID, Postura e Posição 3D
-            px, py, pz = trk.position
-            header_text = f"ID #{trk.track_id} [{trk.posture.upper()}] ({px:.2f}m, {pz:.2f}m)"
-            if trk.last_bbox is not None:
-                tx = int(trk.last_bbox[0] * scale_x)
-                ty = int(max(25, trk.last_bbox[1] * scale_y - 10))
-            else:
-                tx, ty = 40, 40 * trk.track_id
-            cv2.putText(target_img, header_text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 
-                        0.58 if is_fullscreen else 0.50, color, 2)
+                # Cabeçalho com ID, Postura e Posição 3D
+                px, py, pz = trk.position
+                header_text = f"ID #{trk.track_id} [{trk.posture.upper()}] ({px:.2f}m, {pz:.2f}m)"
+                if trk.last_bbox is not None:
+                    tx = int(trk.last_bbox[0] * scale_x)
+                    ty = int(max(25, trk.last_bbox[1] * scale_y - 10))
+                else:
+                    tx, ty = 40, 40 * trk.track_id
+                cv2.putText(target_img, header_text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 
+                            0.58 if is_fullscreen else 0.50, color, 2)
 
     def _draw_floor_view(self, 
                          target_img: np.ndarray, 
@@ -415,7 +418,7 @@ class Dashboard3D:
                             fps: float, 
                             gpu_latency_ms: float):
         """Desenha o cabeçalho de status e as 3 colunas científicas do painel inferior."""
-        status_line = (f"SISTEMA SOCIOENATIVO 3D | GPU: AMD Radeon RX 6600 (DirectML) | "
+        status_line = (f"SISTEMA DE CAPTURA DE MOVIMENTO 3D | GPU: AMD Radeon RX 6600 (DirectML) | "
                        f"FPS: {fps:.1f} | Latência IA: {gpu_latency_ms:.1f} ms | Pessoas Ativas: {len(tracks)}")
         cv2.putText(info_panel, status_line, (25, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 180), 2)
         cv2.line(info_panel, (25, 50), (1575, 50), (60, 60, 60), 1)

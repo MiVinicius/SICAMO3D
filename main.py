@@ -35,8 +35,11 @@ def main():
 
     # 2. Inicializa os motores de IA com aceleração DirectML na GPU AMD
     print("\n[2/6] Carregando modelos de IA no DirectML (AMD Radeon RX 6600)...")
-    pose_engine = DirectMLInference(config.ai.pose_model_path, conf_thresh=config.ai.conf_threshold)
-    object_engine = DirectMLInference(config.ai.object_model_path, conf_thresh=config.ai.toy_conf_threshold)
+    pose_engine = DirectMLInference(config.ai.pose_model_path, 
+                                     conf_thresh=config.ai.conf_threshold, 
+                                     iou_thresh=config.ai.pose_iou_threshold)
+    object_engine = DirectMLInference(config.ai.object_model_path, 
+                                       conf_thresh=config.ai.toy_conf_threshold)
     print(f"  > Modelo de Poses: {config.ai.pose_model_path} (Provedor: {pose_engine.active_provider})")
     print(f"  > Modelo de Objetos: {config.ai.object_model_path} (Provedor: {object_engine.active_provider})")
 
@@ -63,8 +66,8 @@ def main():
     dashboard = Dashboard3D(room_width_m=6.0, room_depth_m=6.0)
 
     print("\nSISTEMA PRONTO! Pressione [Q] ou [ESC] na janela de exibição para encerrar.")
-    cv2.namedWindow("Sistema Socioenativo 3D (AMD RX 6600)", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Sistema Socioenativo 3D (AMD RX 6600)", 1600, 900)
+    cv2.namedWindow("Sistema de Captura de Movimento 3D (AMD RX 6600)", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Sistema de Captura de Movimento 3D (AMD RX 6600)", 1600, 900)
 
     fps = 30.0
     frame_count = 0
@@ -137,41 +140,61 @@ def main():
             for p in pose_dets:
                 kpts_2d = p['keypoints'] # (17, 3) em pixels
                 kpts_3d = sensor.unproject_keypoints_3d(kpts_2d) # (17, 4) em metros
+                bx1, by1, bx2, by2 = p['bbox']
                 
-                # Centro 3D anatômico estável (Pelve como âncora constante de massa)
+                # Centro 3D anatômico estável ancorado no tórax superior (permanece visível em pé e sentado)
                 center_3d = None
+                sh_pts = []
                 hip_pts = []
+                head_pts = []
+                
+                if kpts_3d[5, 3] > 0.20 and kpts_3d[5, 2] > 0.35: sh_pts.append(kpts_3d[5, :3])
+                if kpts_3d[6, 3] > 0.20 and kpts_3d[6, 2] > 0.35: sh_pts.append(kpts_3d[6, :3])
                 if kpts_3d[11, 3] > 0.20 and kpts_3d[11, 2] > 0.35: hip_pts.append(kpts_3d[11, :3])
                 if kpts_3d[12, 3] > 0.20 and kpts_3d[12, 2] > 0.35: hip_pts.append(kpts_3d[12, :3])
+                if kpts_3d[0, 3] > 0.20 and kpts_3d[0, 2] > 0.35: head_pts.append(kpts_3d[0, :3])
 
-                if len(hip_pts) > 0:
-                    center_3d = np.mean(hip_pts, axis=0)
+                if len(sh_pts) > 0 and len(hip_pts) > 0:
+                    # Tronco completo visível: ponto médio ponderado no esterno
+                    center_3d = 0.65 * np.mean(sh_pts, axis=0) + 0.35 * np.mean(hip_pts, axis=0)
+                elif len(sh_pts) > 0:
+                    # Apenas ombros visíveis (ex: sentado em cadeira atrás de mesa): tórax 20cm abaixo dos ombros
+                    sh_m = np.mean(sh_pts, axis=0)
+                    center_3d = np.array([sh_m[0], sh_m[1] + 0.20, sh_m[2]])
+                elif len(hip_pts) > 0:
+                    # Apenas quadris visíveis
+                    hip_m = np.mean(hip_pts, axis=0)
+                    center_3d = np.array([hip_m[0], hip_m[1] - 0.20, hip_m[2]])
+                elif len(head_pts) > 0:
+                    # Apenas cabeça/nariz visível
+                    h_m = np.mean(head_pts, axis=0)
+                    center_3d = np.array([h_m[0], h_m[1] + 0.35, h_m[2]])
                 else:
-                    # Se quadril estiver ocluso, projeta a partir dos ombros para o nível da pelve
-                    sh_pts = []
-                    if kpts_3d[5, 3] > 0.20 and kpts_3d[5, 2] > 0.35: sh_pts.append(kpts_3d[5, :3])
-                    if kpts_3d[6, 3] > 0.20 and kpts_3d[6, 2] > 0.35: sh_pts.append(kpts_3d[6, :3])
-                    if len(sh_pts) > 0:
-                        sh_mean = np.mean(sh_pts, axis=0)
-                        # No Kinect, +Y é para baixo (chão). Pelve fica ~42cm abaixo dos ombros
-                        center_3d = np.array([sh_mean[0], sh_mean[1] + 0.42, sh_mean[2]])
-                    else:
-                        bx1, by1, bx2, by2 = p['bbox']
-                        fb_pt = sensor.get_3d_point_from_color((bx1 + bx2) / 2.0, (by1 + by2) / 2.0)
-                        center_3d = np.array(fb_pt) if fb_pt is not None else np.array([0.0, 0.0, 1.8])
+                    # Amostra de profundidade no terço superior do bounding box (região torácica)
+                    fb_pt = sensor.get_3d_point_from_color((bx1 + bx2) / 2.0, by1 + 0.30 * (by2 - by1))
+                    if fb_pt is not None:
+                        center_3d = np.array(fb_pt)
+
+                # Descarte absoluto de detecções sem profundidade válida do sensor (elimina fantasmas em (0,0,1.8))
+                if center_3d is None or center_3d[2] < 0.40 or center_3d[2] > 7.5:
+                    continue
+
+                # Exige pelo menos 2 articulações com profundidade válida para evitar artefatos estáticos
+                num_valid_kpts = int(np.sum((kpts_3d[:, 3] > 0.20) & (kpts_3d[:, 2] > 0.35)))
+                if num_valid_kpts < 2 and p['confidence'] < 0.50:
+                    continue
 
                 # Diferenciação Métrica 3D: Boneco vs. Pessoa Real
-                bx1, by1, bx2, by2 = p['bbox']
                 h_pixels = by2 - by1
-                center_depth_m = float(center_3d[2]) if center_3d[2] > 0.3 else 1.5
+                center_depth_m = float(center_3d[2])
                 metric_height_m = (h_pixels * center_depth_m) / 1060.0
 
                 dist_shoulders_m = 999.0
                 if kpts_3d[5, 3] > 0.20 and kpts_3d[6, 3] > 0.20:
                     dist_shoulders_m = float(np.linalg.norm(kpts_3d[5, :3] - kpts_3d[6, :3]))
 
-                # Se a altura métrica for menor que 55cm ou os ombros tiverem menos de 20cm: é um BONECO/BRINQUEDO!
-                is_doll = (metric_height_m < 0.55) or (0.01 < dist_shoulders_m < 0.20)
+                # Um boneco/brinquedo precisa ser pequeno em altura (< 55cm) e largura de ombros reduzida (< 25cm)
+                is_doll = (metric_height_m < 0.55) and (0.01 < dist_shoulders_m < 0.25) and (p['confidence'] >= 0.45)
 
                 if is_doll:
                     already_toy = False
@@ -187,18 +210,46 @@ def main():
                             "pos_3d": (float(center_3d[0]), float(center_3d[1]), float(center_3d[2]))
                         })
                 else:
-                    # Pessoa humana real
+                    # Pessoa humana real confirmada
                     person_detections_3d.append({
                         "pos_3d": (float(center_3d[0]), float(center_3d[1]), float(center_3d[2])),
                         "keypoints_3d": kpts_3d,
                         "keypoints_2d": kpts_2d,
-                        "bbox": p['bbox']
+                        "bbox": p['bbox'],
+                        "confidence": float(p['confidence'])
                     })
 
             # Integração com detecções do nó secundário se disponíveis
             remote_dets = hub_receiver.get_latest_detections()
             if remote_dets:
                 person_detections_3d.extend(remote_dets)
+
+            # Deduplicação espacial híbrida 2D + 3D pré-tracker: elimina sombras, sub-boxes e reflexos
+            if len(person_detections_3d) > 1:
+                person_detections_3d.sort(key=lambda d: d.get('confidence', 1.0), reverse=True)
+                deduped_persons = []
+                for det in person_detections_3d:
+                    pos = np.array(det['pos_3d'])
+                    b1 = det['bbox']
+                    is_duplicate = False
+                    for k in deduped_persons:
+                        dist_3d = float(np.linalg.norm(pos - np.array(k['pos_3d'])))
+                        b2 = k['bbox']
+                        # IoU 2D
+                        xA = max(b1[0], b2[0])
+                        yA = max(b1[1], b2[1])
+                        xB = min(b1[2], b2[2])
+                        yB = min(b1[3], b2[3])
+                        inter = max(0.0, xB - xA) * max(0.0, yB - yA)
+                        u = max(1e-5, (b1[2]-b1[0])*(b1[3]-b1[1]) + (b2[2]-b2[0])*(b2[3]-b2[1]) - inter)
+                        iou_2d = inter / u
+
+                        if dist_3d < 0.50 or iou_2d > 0.30:
+                            is_duplicate = True
+                            break
+                    if not is_duplicate:
+                        deduped_persons.append(det)
+                person_detections_3d = deduped_persons
 
             # Atualização do Rastreador 3D (Filtro de Kalman + Algoritmo Húngaro)
             active_tracks = tracker.update(person_detections_3d)
@@ -269,7 +320,7 @@ def main():
                 show_hud_help=show_hud_help
             )
 
-            cv2.imshow("Sistema Socioenativo 3D (AMD RX 6600)", canvas)
+            cv2.imshow("Sistema de Captura de Movimento 3D (AMD RX 6600)", canvas)
             key = cv2.waitKey(1) & 0xFF
             if key == 27 or key == ord('q'): # ESC ou Q
                 break
